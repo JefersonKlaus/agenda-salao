@@ -14,14 +14,13 @@ on:
         type: string
 
 permissions:
-  id-token: write # necessário para entrar na AWS por OIDC, sem chave guardada
   contents: read
 
 jobs:
   deploy:
     name: Publicar (${{ inputs.ambiente }})
     runs-on: ubuntu-latest
-    # As variáveis abaixo (vars.*) vêm do Environment, então cada ambiente usa a sua própria conta AWS.
+    # Segredos e variáveis vêm do Environment, então cada ambiente usa a sua própria conta AWS.
     environment: ${{ inputs.ambiente_github }}
     env:
       AWS_REGION: ${{ vars.AWS_REGION }}
@@ -31,30 +30,56 @@ jobs:
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          # O número da conta faz parte do ARN: não dá para publicar dev na conta de produção por engano.
-          role-to-assume: arn:aws:iam::${{ vars.AWS_ACCOUNT_ID }}:role/agenda-salao-${{ inputs.ambiente }}-deploy
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Conferir se as chaves são da conta certa
+        env:
+          CONTA_ESPERADA: ${{ vars.AWS_ACCOUNT_ID }}
+        run: |
+          CONTA="$(aws sts get-caller-identity --query Account --output text)"
+          if [ "$CONTA" != "$CONTA_ESPERADA" ]; then
+            echo "::error::As chaves são da conta $CONTA, mas o Environment '$AMBIENTE' espera $CONTA_ESPERADA. Nada foi publicado."
+            exit 1
+          fi
 
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.5"
           terraform_wrapper: false # senão `terraform output -raw` vem com texto extra
 
+      - name: Garantir o bucket do estado do Terraform (cria na primeira vez, depois só confere)
+        id: estado
+        env:
+          BUCKET: agenda-salao-estado-${{ vars.AWS_ACCOUNT_ID }}
+        run: |
+          if ! aws s3api head-bucket --bucket "$BUCKET" 2>/dev/null; then
+            if [ "$AWS_REGION" = "us-east-1" ]; then
+              aws s3api create-bucket --bucket "$BUCKET"
+            else
+              aws s3api create-bucket --bucket "$BUCKET" --region "$AWS_REGION" \
+                --create-bucket-configuration LocationConstraint="$AWS_REGION"
+            fi
+          fi
+          aws s3api put-public-access-block --bucket "$BUCKET" --public-access-block-configuration \
+            BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true
+          aws s3api put-bucket-versioning --bucket "$BUCKET" --versioning-configuration Status=Enabled
+          aws s3api put-bucket-encryption --bucket "$BUCKET" --server-side-encryption-configuration \
+            '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
+          echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
+
       - name: Terraform init e apply
         working-directory: infra
         run: |
           terraform init -input=false \
-            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="bucket=${{ steps.estado.outputs.bucket }}" \
             -backend-config="key=agenda-salao/${AMBIENTE}.tfstate" \
             -backend-config="region=${AWS_REGION}" \
             -backend-config="use_lockfile=true"
           terraform apply -auto-approve -input=false \
             -var="ambiente=${AMBIENTE}" \
-            -var="ambiente_github=${{ inputs.ambiente_github }}" \
-            -var="regiao=${AWS_REGION}" \
-            -var="repositorio_github=${{ github.repository }}" \
-            -var="bucket_estado=${{ vars.TF_STATE_BUCKET }}" \
-            -var="criar_provedor_oidc=${{ vars.CRIAR_PROVEDOR_OIDC || 'true' }}"
+            -var="regiao=${AWS_REGION}"
 
       - name: Gerar frontend/js/config.js com os dados da AWS
         working-directory: infra
