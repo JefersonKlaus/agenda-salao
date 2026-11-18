@@ -1,0 +1,106 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DadosDynamoDB",
+      "Effect": "Allow",
+      "Action": "dynamodb:*",
+      "Resource": "arn:aws:dynamodb:*:*:table/agenda-salao-*"
+    },
+    {
+      "Sid": "FuncaoLambda",
+      "Effect": "Allow",
+      "Action": "lambda:*",
+      "Resource": "arn:aws:lambda:*:*:function:agenda-salao-*"
+    },
+    {
+      "Sid": "LogsDoProjeto",
+      "Effect": "Allow",
+      "Action": "logs:*",
+      "Resource": [
+        "arn:aws:logs:*:*:log-group:/aws/lambda/agenda-salao-*",
+        "arn:aws:logs:*:*:log-group:/aws/lambda/agenda-salao-*:*",
+        "arn:aws:logs:*:*:log-group:/aws/apigateway/agenda-salao-*",
+        "arn:aws:logs:*:*:log-group:/aws/apigateway/agenda-salao-*:*"
+      ]
+    },
+    {
+      "Sid": "LogsGerais",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups",
+        "logs:ListTagsForResource",
+        "logs:TagResource",
+        "logs:CreateLogDelivery",
+        "logs:GetLogDelivery",
+        "logs:UpdateLogDelivery",
+        "logs:DeleteLogDelivery",
+        "logs:ListLogDeliveries",
+        "logs:PutResourcePolicy",
+        "logs:DescribeResourcePolicies"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "UsuariosCognito",
+      "Effect": "Allow",
+      "Action": "cognito-idp:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ApiGateway",
+      "Effect": "Allow",
+      "Action": "apigateway:*",
+      "Resource": "arn:aws:apigateway:*::/*"
+    },
+    {
+      "Sid": "CloudFront",
+      "Effect": "Allow",
+      "Action": "cloudfront:*",
+      "Resource": "*"
+    },
+    {
+      "Sid": "SiteEEstadoNoS3",
+      "Effect": "Allow",
+      "Action": "s3:*",
+      "Resource": [
+        "arn:aws:s3:::agenda-salao-*-site-*",
+        "arn:aws:s3:::agenda-salao-*-site-*/*",
+        "arn:aws:s3:::agenda-salao-estado-*",
+        "arn:aws:s3:::agenda-salao-estado-*/*"
+      ]
+    },
+    {
+      "Sid": "RolesDoProjeto",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:GetRole",
+        "iam:UpdateRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:PutRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "iam:ListInstanceProfilesForRole",
+        "iam:PassRole"
+      ],
+      "Resource": "arn:aws:iam::*:role/agenda-salao-*"
+    },
+    {
+      "Sid": "SoOLogBasicoDaLambda",
+      "Effect": "Allow",
+      "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
+      "Resource": "arn:aws:iam::*:role/agenda-salao-*",
+      "Condition": {
+        "ArnEquals": {
+          "iam:PolicyARN": "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        }
+      }
+    }
+  ]
+}
