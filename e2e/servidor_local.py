@@ -1,6 +1,7 @@
 """Servidor de desenvolvimento: serve o frontend e a API usando o MESMO código da Lambda,
 com banco em memória. Serve para testar tudo sem AWS:  python e2e/servidor_local.py"""
 import json
+import re
 import sys
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,6 +14,10 @@ sys.path.insert(0, str(RAIZ / "backend" / "src"))
 from agenda.agenda import Agenda                    # noqa: E402
 from agenda.http import tratar                      # noqa: E402
 from agenda.repositorio_memoria import RepositorioMemoria  # noqa: E402
+
+# Login simulado: aceita qualquer e-mail e senha (menos "errada"). Cada e-mail é um salão separado.
+# O teste de navegador desliga isto e usa o seu próprio Cognito falso.
+LOGIN_SIMULADO = True
 
 AGENDA = Agenda(RepositorioMemoria(), datetime.now)
 # Igual ao do CloudFront (infra/frontend.tf): se o site quebrar com ele, o teste acusa antes do deploy.
@@ -39,12 +44,36 @@ class Manipulador(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(corpo)
 
+    def _cognito(self):
+        corpo = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        alvo = self.headers.get("X-Amz-Target", "").split(".")[-1]
+        if alvo == "InitiateAuth" and corpo.get("AuthFlow") == "REFRESH_TOKEN_AUTH":
+            dono = corpo["AuthParameters"]["REFRESH_TOKEN"]
+        else:
+            usuario = corpo.get("AuthParameters", {})
+            dono = re.sub(r"\W", "-", usuario.get("USERNAME", "salao"))
+            if usuario.get("PASSWORD") in (None, "", "errada"):
+                resposta, status = {"__type": "NotAuthorizedException"}, 400
+                return self._json(status, resposta, "application/x-amz-json-1.1")
+        resultado = {"AuthenticationResult": {"IdToken": f"token-{dono}", "ExpiresIn": 3600,
+                                              "RefreshToken": dono}}
+        self._json(200, resultado, "application/x-amz-json-1.1")
+
+    def _json(self, status, dados, tipo="application/json"):
+        corpo = json.dumps(dados).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", tipo)
+        self.send_header("Content-Length", str(len(corpo)))
+        self.end_headers()
+        self.wfile.write(corpo)
+
     def _estatico(self):
         caminho = urlparse(self.path).path.lstrip("/") or "index.html"
         arquivo = (RAIZ / "frontend" / caminho).resolve()
         if caminho == "js/config.js":
+            cognito = f',cognitoUrl:"http://{self.headers["Host"]}/cognito"' if LOGIN_SIMULADO else ""
             corpo = ('export const CONFIG = {regiao:"sa-east-1",clienteId:"local",'
-                     f'apiUrl:"http://{self.headers["Host"]}/api"}};').encode()
+                     f'apiUrl:"http://{self.headers["Host"]}/api"{cognito}}};').encode()
         elif (RAIZ / "frontend").resolve() in arquivo.parents and arquivo.is_file():
             corpo = arquivo.read_bytes()
         else:
@@ -59,7 +88,10 @@ class Manipulador(BaseHTTPRequestHandler):
     def do_GET(self):
         self._api() if self.path.startswith("/api") else self._estatico()
 
-    do_POST = do_PUT = do_DELETE = _api
+    def do_POST(self):
+        self._cognito() if self.path.startswith("/cognito") else self._api()
+
+    do_PUT = do_DELETE = _api
 
     def log_message(self, *args):
         pass
@@ -71,5 +103,5 @@ def iniciar(porta=8765):
 
 
 if __name__ == "__main__":
-    print("http://127.0.0.1:8765  (o login precisa do Cognito: veja e2e/teste_e2e.py)")
+    print("Abra http://127.0.0.1:8765  (login simulado: qualquer e-mail e senha; dados somem ao parar)")
     iniciar().serve_forever()

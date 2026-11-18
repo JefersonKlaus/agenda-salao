@@ -25,6 +25,7 @@ def cognito(rota):
 
 
 def rodar():
+    servidor_local.LOGIN_SIMULADO = False       # aqui o Cognito falso é o do próprio teste
     servidor = servidor_local.iniciar(8765)
     threading.Thread(target=servidor.serve_forever, daemon=True).start()
     erros = []
