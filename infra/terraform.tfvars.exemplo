@@ -1,4 +1,0 @@
-# Copie para terraform.tfvars (que não vai para o GitHub) e ajuste.
-repositorio_github = "seu-usuario/agenda_salao"
-bucket_estado      = "meu-estado-terraform-123456789012"
-# criar_provedor_oidc = false   # use se a conta já tem o provedor do GitHub

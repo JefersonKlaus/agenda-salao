@@ -21,7 +21,3 @@ output "bucket_do_site" {
 output "cloudfront_id" {
   value = aws_cloudfront_distribution.site.id
 }
-
-output "role_de_deploy_arn" {
-  value = aws_iam_role.deploy.arn
-}
