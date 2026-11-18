@@ -44,37 +44,73 @@ python e2e/servidor_local.py           # serve o site + API em memória em http:
 O teste de navegador cobre login com troca de senha, cadastros, agendamento, conflito,
 cancelamento, proteção contra HTML injetado e a mesma política de segurança (CSP) do CloudFront.
 
-## Publicar na AWS pela primeira vez
+## Ambientes e publicação
 
-1. **Bucket do estado do Terraform** (uma vez, à mão):
-   ```bash
-   aws s3api create-bucket --bucket SEU-BUCKET-DE-ESTADO --region sa-east-1 \
-     --create-bucket-configuration LocationConstraint=sa-east-1
-   aws s3api put-bucket-versioning --bucket SEU-BUCKET-DE-ESTADO --versioning-configuration Status=Enabled
-   ```
-2. **Primeiro `apply` na sua máquina** (com credenciais de administrador), porque ele cria a role
-   que o GitHub vai usar depois:
-   ```bash
-   cd infra
-   cp terraform.tfvars.exemplo terraform.tfvars   # preencha repositorio_github e bucket_estado
-   terraform fmt -recursive                       # ajusta o formato uma vez e faça commit
-   terraform init -backend-config="bucket=SEU-BUCKET-DE-ESTADO" \
-     -backend-config="key=agenda-salao/prod.tfstate" -backend-config="region=sa-east-1" \
-     -backend-config="use_lockfile=true"
-   terraform apply
-   ```
-3. **No GitHub** (Settings → Environments → criar `producao`, com *Required reviewers*) e em
-   Settings → Variables, crie: `AWS_REGION` (`sa-east-1`), `AWS_ROLE_ARN` (saída
-   `role_de_deploy_arn`), `TF_STATE_BUCKET`, e `CRIAR_PROVEDOR_OIDC` = `false` se o primeiro
-   `apply` criou o provedor (ou se a conta já tinha).
-4. Dê `push` na `main`: roda os testes e, se passarem, o deploy aplica o Terraform, gera
-   `frontend/js/config.js`, envia o site ao S3 e limpa o cache do CloudFront.
-5. **Criar o login de um salão** (não há cadastro aberto de propósito):
-   ```bash
-   aws cognito-idp admin-create-user --region sa-east-1 --user-pool-id <cognito_user_pool_id> \
-     --username dona@salao.com --user-attributes Name=email,Value=dona@salao.com
-   ```
-   O Cognito envia uma senha temporária por e-mail; no primeiro acesso o site pede a senha nova.
+São dois ambientes, **cada um numa conta AWS diferente**:
+
+| Ambiente | Quando publica | Environment no GitHub | Nome dos recursos |
+|---|---|---|---|
+| `dev` | **sozinho**, a cada push na branch `dev` | `dev` | `agenda-salao-dev-*` |
+| `prod` | **só quando alguém aperta o botão** (Actions → *Deploy produção* → *Run workflow*, na `main`) | `producao` | `agenda-salao-prod-*` |
+
+Fluxo: trabalha na `dev` (deploy automático) → abre PR `dev` → `main` (roda o CI) → faz o merge →
+publica em produção pelo botão. O workflow de produção recusa rodar fora da `main` e pede que você
+digite `producao` para confirmar. Merge na `main` **não** publica nada.
+
+### Variáveis do GitHub
+
+**Nenhum segredo é necessário**: o GitHub entra na AWS por OIDC, sem chave guardada. Só há
+*variáveis* (Settings → Environments → *dev* / *producao* → Environment variables), com **valores
+diferentes em cada Environment**:
+
+| Variável | Exemplo | Para que serve |
+|---|---|---|
+| `AWS_ACCOUNT_ID` | `123456789012` | conta daquele ambiente; entra no ARN da role de deploy |
+| `AWS_REGION` | `sa-east-1` | região do deploy |
+| `TF_STATE_BUCKET` | `agenda-salao-estado-123456789012` | bucket do estado do Terraform **daquela conta** |
+| `CRIAR_PROVEDOR_OIDC` | `true` | opcional (padrão `true`); veja a nota abaixo |
+
+> **`CRIAR_PROVEDOR_OIDC`:** deixe `true` (ou não crie a variável) quando o Terraform é quem cria o
+> provedor do GitHub na conta, inclusive nas execuções seguintes. Use `false` **somente** se a conta
+> já tinha esse provedor criado por fora do Terraform. Trocar de `true` para `false` depois de o
+> Terraform tê-lo criado faria o Terraform **apagá-lo**.
+
+Configurações recomendadas dos Environments:
+- `producao`: *Required reviewers* (você) e *Deployment branches* = só `main`.
+- `dev`: *Deployment branches* = só `dev`.
+
+### Primeira vez em cada conta (dev e prod, uma vez cada)
+
+Com credenciais de administrador **daquela conta**:
+
+```bash
+# 1. bucket do estado (nome único no mundo; sugestão: inclua o número da conta)
+aws s3api create-bucket --bucket SEU-BUCKET-DE-ESTADO --region sa-east-1 \
+  --create-bucket-configuration LocationConstraint=sa-east-1
+aws s3api put-bucket-versioning --bucket SEU-BUCKET-DE-ESTADO --versioning-configuration Status=Enabled
+
+# 2. primeiro apply (cria também a role que o GitHub vai usar)
+cd infra
+cp terraform.tfvars.exemplo terraform.tfvars   # preencha repositorio_github e bucket_estado
+terraform fmt -recursive                       # ajusta o formato uma vez; faça commit
+terraform init -backend-config="bucket=SEU-BUCKET-DE-ESTADO" \
+  -backend-config="key=agenda-salao/dev.tfstate" -backend-config="region=sa-east-1" \
+  -backend-config="use_lockfile=true"
+terraform apply -var="ambiente=dev"            # na conta de produção: ambiente=prod e key=.../prod.tfstate
+```
+
+Depois: crie os dois Environments com as variáveis acima, crie a branch `dev`
+(`git switch -c dev && git push -u origin dev`) e o primeiro push nela já publica.
+
+### Criar o login de um salão (não há cadastro aberto, de propósito)
+
+```bash
+aws cognito-idp admin-create-user --region sa-east-1 --user-pool-id <cognito_user_pool_id> \
+  --username dona@salao.com --user-attributes Name=email,Value=dona@salao.com
+```
+
+O Cognito envia uma senha temporária por e-mail; no primeiro acesso o site pede a senha nova.
+Os usuários de `dev` e `prod` são separados (cada conta tem o seu Cognito).
 
 ## Segurança e custo
 
@@ -82,7 +118,8 @@ cancelamento, proteção contra HTML injetado e a mesma política de segurança 
 - A Lambda só pode ler/gravar/apagar itens da própria tabela. O API Gateway limita a taxa
   (`limite_por_segundo`) para conter abuso e custo.
 - O site só conversa com ele mesmo, o Cognito e a API (CSP) e não pode ser colocado em iframe.
-- O deploy entra na AWS por OIDC, sem chave guardada no GitHub, e só pelo ambiente `producao`.
+- O deploy entra na AWS por OIDC, sem chave guardada no GitHub. A role de cada conta só aceita o
+  Environment correspondente (`dev` ou `producao`).
   **Atenção:** a role de deploy pode alterar a si mesma (o Terraform a gerencia), então proteja a
   branch `main` e exija aprovação no ambiente.
 - Custo: sem tráfego, perto de zero (tudo é por uso). O que pode cobrar mesmo parado é pouco:
