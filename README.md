@@ -114,12 +114,3 @@ usuários de `dev` e `prod` são separados.
   migrar depois.
 - Custo: sem tráfego, perto de zero (tudo é por uso). O que pode cobrar mesmo parado é pouco:
   logs e armazenamento no S3.
-
-## O que ainda falta (de propósito: é só a base)
-
-- Página pública para a cliente agendar sozinha e lembretes por WhatsApp/SMS.
-- Cadastro aberto de salões, cobrança da assinatura e política de privacidade (LGPD).
-- Domínio próprio com certificado (ACM) e alarmes no CloudWatch.
-- O Terraform e as Actions **não foram executados** no ambiente onde o código foi escrito (sem
-  Terraform nem AWS): o primeiro deploy na `dev` é o teste de verdade. Se falhar, copie o erro do
-  Actions e corrija.
