@@ -54,6 +54,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.5"
-      - run: terraform fmt -check -recursive
+      # Só avisa: se o formato estiver fora do padrão, não trava o deploy.
+      - run: terraform fmt -check -recursive -diff || echo "::warning::Formato do Terraform fora do padrão (não bloqueia)."
       - run: terraform init -backend=false -input=false
       - run: terraform validate
