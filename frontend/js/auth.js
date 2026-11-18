@@ -10,8 +10,11 @@ const MENSAGENS = {
   LimitExceededException: "Muitas tentativas. Espere um pouco.",
 };
 
+// `cognitoUrl` só existe no servidor de teste local (e2e/servidor_local.py); na AWS usa o endereço real.
+const URL_COGNITO = CONFIG.cognitoUrl || `https://cognito-idp.${CONFIG.regiao}.amazonaws.com/`;
+
 async function cognito(alvo, corpo) {
-  const resposta = await fetch(`https://cognito-idp.${CONFIG.regiao}.amazonaws.com/`, {
+  const resposta = await fetch(URL_COGNITO, {
     method: "POST",
     headers: { "Content-Type": "application/x-amz-json-1.1", "X-Amz-Target": `AWSCognitoIdentityProviderService.${alvo}` },
     body: JSON.stringify({ ClientId: CONFIG.clienteId, ...corpo }),
