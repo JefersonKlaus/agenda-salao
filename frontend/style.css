@@ -1,0 +1,48 @@
+:root {
+  --fundo: #fbf7f8; --cartao: #ffffff; --texto: #2b2430; --suave: #6f6577;
+  --borda: #e6dde2; --marca: #a0306b; --marca-clara: #f6e3ee; --perigo: #b3261e; --ok: #1f7a4d;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --fundo: #17131a; --cartao: #221c27; --texto: #f1eaf3; --suave: #aa9fb2;
+    --borda: #382f3f; --marca: #e07ab0; --marca-clara: #3a2432; --perigo: #ff8a80; --ok: #6fd3a0;
+  }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fundo); color: var(--texto); font: 16px/1.45 system-ui, sans-serif; }
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; padding: 10px 16px;
+  background: var(--cartao); border-bottom: 1px solid var(--borda); }
+header[hidden] { display: none; }
+nav { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+nav button, button.link { background: none; border: 0; color: var(--suave); padding: 8px 12px;
+  border-radius: 8px; cursor: pointer; font: inherit; }
+nav button[aria-current="page"] { background: var(--marca-clara); color: var(--marca); font-weight: 600; }
+main { max-width: 760px; margin: 0 auto; padding: 16px; }
+h1, h2 { margin: 0 0 12px; font-size: 1.25rem; }
+.cartao { background: var(--cartao); border: 1px solid var(--borda); border-radius: 12px;
+  padding: 14px; margin-bottom: 12px; }
+.linha { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.suave { color: var(--suave); font-size: .9rem; }
+.aviso { color: var(--suave); text-align: center; padding: 24px 0; }
+label { display: block; margin: 10px 0 4px; font-size: .9rem; color: var(--suave); }
+input, select { width: 100%; padding: 10px; font: inherit; color: var(--texto); background: var(--fundo);
+  border: 1px solid var(--borda); border-radius: 8px; }
+input[type="checkbox"] { width: auto; margin-right: 6px; }
+.opcao { display: inline-flex; align-items: center; margin: 4px 12px 4px 0; color: var(--texto); font-size: 1rem; }
+button.primario, button.secundario, button.perigo { padding: 10px 16px; border-radius: 8px; font: inherit;
+  cursor: pointer; border: 1px solid var(--marca); }
+button.primario { background: var(--marca); color: #fff; }
+button.secundario { background: none; color: var(--marca); }
+button.perigo { background: none; border-color: var(--perigo); color: var(--perigo); }
+button:disabled { opacity: .5; cursor: not-allowed; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--marca); outline-offset: 2px; }
+.horarios { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.horarios button { padding: 8px 12px; border: 1px solid var(--borda); background: var(--fundo);
+  color: var(--texto); border-radius: 8px; cursor: pointer; font: inherit; }
+.horarios button[aria-pressed="true"] { background: var(--marca); color: #fff; border-color: var(--marca); }
+.acoes { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+#avisos { position: fixed; left: 0; right: 0; bottom: 16px; display: flex; flex-direction: column;
+  align-items: center; gap: 8px; pointer-events: none; }
+.toast { background: var(--texto); color: var(--fundo); padding: 10px 16px; border-radius: 8px; max-width: 90%; }
+.toast.erro { background: var(--perigo); color: #fff; }
+.login { max-width: 380px; margin: 10vh auto 0; }
