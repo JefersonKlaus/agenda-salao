@@ -41,6 +41,12 @@ python e2e/teste_e2e.py                # abre o site num navegador e usa a API d
 python e2e/servidor_local.py           # serve o site + API em memória em http://127.0.0.1:8765
 ```
 
+**Ver o site no seu computador:** só precisa de Python 3.12+ (sem instalar nada). Rode
+`python e2e/servidor_local.py` na pasta do projeto e abra <http://127.0.0.1:8765>. O login é
+simulado: qualquer e-mail e senha entram (menos a senha `errada`), e cada e-mail é um salão
+separado. Os dados ficam só na memória e somem ao parar o servidor. Não abra o `index.html` com
+duplo clique: o navegador bloqueia os módulos JavaScript fora de um servidor.
+
 O teste de navegador cobre login com troca de senha, cadastros, agendamento, conflito,
 cancelamento, proteção contra HTML injetado e a mesma política de segurança (CSP) do CloudFront.
 
