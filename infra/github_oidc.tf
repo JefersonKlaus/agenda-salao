@@ -24,11 +24,12 @@ data "aws_iam_policy_document" "deploy_confia" {
       values   = ["sts.amazonaws.com"]
     }
 
-    # Só o job do ambiente "producao" deste repositório (o ambiente exige aprovação no GitHub).
+    # Só o job do Environment deste ambiente (dev ou producao) neste repositório.
+    # Assim a conta de dev nunca aceita o deploy de produção, e vice-versa.
     condition {
       test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.repositorio_github}:environment:producao"]
+      values   = ["repo:${var.repositorio_github}:environment:${local.ambiente_github}"]
     }
   }
 }

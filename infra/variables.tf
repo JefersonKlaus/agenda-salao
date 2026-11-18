@@ -20,6 +20,12 @@ variable "repositorio_github" {
   type        = string
 }
 
+variable "ambiente_github" {
+  description = "Nome do Environment do GitHub autorizado a publicar (dev, producao). Vazio = producao para prod, ou o próprio nome do ambiente."
+  type        = string
+  default     = ""
+}
+
 variable "bucket_estado" {
   description = "Bucket S3 que guarda o estado do Terraform (a role de deploy precisa de acesso)."
   type        = string
@@ -54,6 +60,7 @@ variable "rajada" {
 }
 
 locals {
-  prefixo = "${var.nome}-${var.ambiente}"
-  conta   = data.aws_caller_identity.atual.account_id
+  prefixo         = "${var.nome}-${var.ambiente}"
+  conta           = data.aws_caller_identity.atual.account_id
+  ambiente_github = var.ambiente_github != "" ? var.ambiente_github : (var.ambiente == "prod" ? "producao" : var.ambiente)
 }
