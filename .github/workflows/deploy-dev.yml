@@ -1,0 +1,25 @@
+# Todo push na branch `dev` publica sozinho na conta AWS de desenvolvimento.
+name: Deploy dev
+
+on:
+  push:
+    branches: [dev]
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  testes:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: testes
+    uses: ./.github/workflows/deploy-reutilizavel.yml
+    with:
+      ambiente: dev
+      ambiente_github: dev
