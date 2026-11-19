@@ -1,27 +1,25 @@
-"""Ponto de entrada da Lambda. Só liga as peças: banco, relógio e roteador."""
+"""Lambda entry point. It only wires the pieces together: database, clock and router."""
 from __future__ import annotations
 
 import os
-from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from .agenda import Agenda
-from .http import tratar
-from .repositorio_dynamo import RepositorioDynamo
+from .clock import salon_now
+from .dynamo_repository import DynamoRepository
+from .http import handle
 
-# Brasília é UTC-3 o ano todo (sem horário de verão desde 2019). Evita depender de tzdata.
-FUSO = timezone(timedelta(hours=-3))
 _agenda = None
 
 
-def _obter_agenda() -> Agenda:
+def _get_agenda() -> Agenda:
     global _agenda
-    if _agenda is None:             # criado uma vez por ambiente de execução e reaproveitado
-        import boto3                # já vem na Lambda; importado aqui para os testes não exigirem
-        repo = RepositorioDynamo(boto3.client("dynamodb"), os.environ["TABELA"])
-        _agenda = Agenda(repo, lambda: datetime.now(FUSO).replace(tzinfo=None))
+    if _agenda is None:             # created once per execution environment and reused
+        import boto3                # already present in Lambda; imported here so tests don't require it
+        repo = DynamoRepository(boto3.client("dynamodb"), os.environ["TABLE_NAME"])
+        _agenda = Agenda(repo, salon_now)
     return _agenda
 
 
-def lambda_handler(evento: dict[str, Any], contexto: Any) -> dict[str, Any]:
-    return tratar(evento, _obter_agenda())
+def lambda_handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
+    return handle(event, _get_agenda())

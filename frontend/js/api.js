@@ -1,23 +1,23 @@
 import { CONFIG } from "./config.js";
-import { sair, token } from "./auth.js";
+import { signOut, token } from "./auth.js";
 
-/** Chama a API com o token de login. Lança Error com a mensagem do servidor em português. */
-export async function api(metodo, caminho, corpo, parametros) {
+/** Calls the API with the login token. Throws an Error with the server's message (in Portuguese). */
+export async function api(method, path, body, params) {
   const jwt = await token();
   if (!jwt) { location.reload(); throw new Error("Sessão expirada."); }
-  const url = new URL(CONFIG.apiUrl.replace(/\/$/, "") + caminho);
-  for (const [k, v] of Object.entries(parametros || {})) url.searchParams.set(k, v);
-  let resposta;
+  const url = new URL(CONFIG.apiUrl.replace(/\/$/, "") + path);
+  for (const [k, v] of Object.entries(params || {})) url.searchParams.set(k, v);
+  let response;
   try {
-    resposta = await fetch(url, {
-      method: metodo,
-      headers: { Authorization: `Bearer ${jwt}`, ...(corpo ? { "Content-Type": "application/json" } : {}) },
-      body: corpo ? JSON.stringify(corpo) : undefined,
+    response = await fetch(url, {
+      method,
+      headers: { Authorization: `Bearer ${jwt}`, ...(body ? { "Content-Type": "application/json" } : {}) },
+      body: body ? JSON.stringify(body) : undefined,
     });
   } catch { throw new Error("Sem conexão com o servidor."); }
-  if (resposta.status === 401) { sair(); location.reload(); throw new Error("Sessão expirada."); }
-  if (resposta.status === 204) return null;
-  const dados = await resposta.json().catch(() => ({}));
-  if (!resposta.ok) throw new Error(dados.erro || "Algo deu errado. Tente de novo.");
-  return dados;
+  if (response.status === 401 && !CONFIG.skipLogin) { signOut(); location.reload(); throw new Error("Sessão expirada."); }
+  if (response.status === 204) return null;
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "Algo deu errado. Tente de novo.");
+  return data;
 }

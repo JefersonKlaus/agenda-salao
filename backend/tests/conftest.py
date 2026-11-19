@@ -1,4 +1,5 @@
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 
@@ -7,64 +8,83 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from agenda.agenda import Agenda  # noqa: E402
-from agenda.repositorio_dynamo import RepositorioDynamo  # noqa: E402
-from agenda.repositorio_memoria import RepositorioMemoria  # noqa: E402
+from agenda.dynamo_repository import DynamoRepository  # noqa: E402
+from agenda.memory_repository import MemoryRepository  # noqa: E402
 
-AGORA = datetime(2026, 11, 16, 10, 0)       # segunda-feira, 10:00
-DONO = "dono-a"
-OUTRO = "dono-b"
-
-
-class ErroFalso(Exception):
-    """Imita botocore.ClientError: tem `.response`."""
-
-    def __init__(self, codigo, motivos=()):
-        super().__init__(codigo)
-        self.response = {"Error": {"Code": codigo},
-                         "CancellationReasons": [{"Code": m} for m in motivos]}
+NOW = datetime(2026, 11, 16, 10, 0)         # Monday, 10:00
+OWNER = "owner-a"
+OTHER = "owner-b"
 
 
-class DynamoFalso:
-    """Só o que o repositório usa. Transação é tudo-ou-nada, como no DynamoDB de verdade."""
+class FakeClientError(Exception):
+    """Mimics botocore.ClientError: has `.response`."""
 
-    def __init__(self, pagina=2):
-        self.itens, self.pagina, self.chamadas = {}, pagina, []
+    def __init__(self, code, reasons=()):
+        super().__init__(code)
+        self.response = {"Error": {"Code": code},
+                         "CancellationReasons": [{"Code": r} for r in reasons]}
+
+
+class FakeDynamo:
+    """Only what the repository uses. A transaction is all-or-nothing, like in the real DynamoDB."""
+
+    def __init__(self, page_size=2):
+        self.items, self.page_size, self.calls = {}, page_size, []
+        self._lock = threading.Lock()       # the real transaction is atomic even with concurrent calls
 
     @staticmethod
-    def _k(chave):
-        return chave["PK"]["S"], chave["SK"]["S"]
+    def _k(key):
+        return key["PK"]["S"], key["SK"]["S"]
 
     def get_item(self, TableName, Key, ConsistentRead=False):
-        item = self.itens.get(self._k(Key))
+        item = self.items.get(self._k(Key))
         return {"Item": item} if item else {}
 
     def put_item(self, TableName, Item):
-        self.itens[self._k(Item)] = Item
+        self.items[self._k(Item)] = Item
 
     def delete_item(self, TableName, Key):
-        self.itens.pop(self._k(Key), None)
+        self.items.pop(self._k(Key), None)
 
     def query(self, TableName, KeyConditionExpression, ExpressionAttributeValues,
               ConsistentRead=False, ExclusiveStartKey=None):
-        pk, prefixo = ExpressionAttributeValues[":pk"]["S"], ExpressionAttributeValues[":p"]["S"]
-        achados = sorted(k for k in self.itens if k[0] == pk and k[1].startswith(prefixo))
+        values = {k: v["S"] for k, v in ExpressionAttributeValues.items()}
+        if "begins_with(SK, :p)" in KeyConditionExpression:
+            matches = lambda sk: sk.startswith(values[":p"])                          # noqa: E731
+        else:
+            assert "SK BETWEEN :low AND :high" in KeyConditionExpression, KeyConditionExpression
+            matches = lambda sk: values[":low"] <= sk <= values[":high"]              # noqa: E731
+        pk = values[":pk"]
+        found = sorted(k for k in self.items if k[0] == pk and matches(k[1]))
         if ExclusiveStartKey:
-            achados = [k for k in achados if k[1] > ExclusiveStartKey["SK"]["S"]]
-        pagina, resto = achados[:self.pagina], achados[self.pagina:]
-        resposta = {"Items": [self.itens[k] for k in pagina]}
-        if resto:
-            resposta["LastEvaluatedKey"] = {"PK": {"S": pk}, "SK": {"S": pagina[-1][1]}}
-        return resposta
+            found = [k for k in found if k[1] > ExclusiveStartKey["SK"]["S"]]
+        page, rest = found[:self.page_size], found[self.page_size:]
+        response = {"Items": [self.items[k] for k in page]}
+        if rest:
+            response["LastEvaluatedKey"] = {"PK": {"S": pk}, "SK": {"S": page[-1][1]}}
+        return response
+
+    def _condition_holds(self, put):
+        """The two conditions the repository uses: "not there yet" and "unchanged since it was read"."""
+        condition = put and put.get("ConditionExpression")
+        if not condition:
+            return True
+        current = self.items.get(self._k(put["Item"]))
+        if condition == "attribute_not_exists(PK)":
+            return current is None
+        assert condition == "#d = :old", condition
+        attribute = put["ExpressionAttributeNames"]["#d"]
+        return current is not None and current.get(attribute) == put["ExpressionAttributeValues"][":old"]
 
     def transact_write_items(self, TransactItems):
-        self.chamadas.append(TransactItems)
-        motivos = []
-        for op in TransactItems:
-            put = op.get("Put")
-            falhou = bool(put and put.get("ConditionExpression") and self._k(put["Item"]) in self.itens)
-            motivos.append("ConditionalCheckFailed" if falhou else "None")
-        if "ConditionalCheckFailed" in motivos:
-            raise ErroFalso("TransactionCanceledException", motivos)
+        with self._lock:
+            self._transaction(TransactItems)
+
+    def _transaction(self, TransactItems):
+        self.calls.append(TransactItems)
+        reasons = ["None" if self._condition_holds(op.get("Put")) else "ConditionalCheckFailed" for op in TransactItems]
+        if "ConditionalCheckFailed" in reasons:
+            raise FakeClientError("TransactionCanceledException", reasons)
         for op in TransactItems:
             if "Put" in op:
                 self.put_item(**{"TableName": "t", "Item": op["Put"]["Item"]})
@@ -72,26 +92,26 @@ class DynamoFalso:
                 self.delete_item(TableName="t", Key=op["Delete"]["Key"])
 
 
-@pytest.fixture(params=["memoria", "dynamo"])
+@pytest.fixture(params=["memory", "dynamo"])
 def repo(request):
-    """Todo teste de regra roda nos dois repositórios: eles precisam se comportar igual."""
-    return RepositorioMemoria() if request.param == "memoria" else RepositorioDynamo(DynamoFalso(), "t")
+    """Every rule test runs against both repositories: they must behave the same."""
+    return MemoryRepository() if request.param == "memory" else DynamoRepository(FakeDynamo(), "t")
 
 
 @pytest.fixture
 def agenda(repo):
-    return Agenda(repo, lambda: AGORA)
+    return Agenda(repo, lambda: NOW)
 
 
 @pytest.fixture
-def salao(agenda):
-    """Um serviço de 60 min, outro de 30, e uma profissional que faz os dois."""
-    corte = agenda.criar(DONO, "servico", {"nome": "Corte", "duracao_min": 60, "preco_centavos": 8000})
-    unha = agenda.criar(DONO, "servico", {"nome": "Unha", "duracao_min": 30, "preco_centavos": 4000})
-    ana = agenda.criar(DONO, "profissional", {"nome": "Ana", "servicos": [corte.id, unha.id]})
-    return corte, unha, ana
+def salon(agenda):
+    """A 60-minute service, a 30-minute one, and a professional who performs both."""
+    haircut = agenda.create(OWNER, "service", {"name": "Haircut", "duration_min": 60, "price_cents": 8000})
+    nails = agenda.create(OWNER, "service", {"name": "Nails", "duration_min": 30, "price_cents": 4000})
+    ana = agenda.create(OWNER, "professional", {"name": "Ana", "services": [haircut.id, nails.id]})
+    return haircut, nails, ana
 
 
-def pedido(corte, ana, inicio="10:00", data="2026-11-17", **extra):
-    return {"data": data, "inicio": inicio, "servico_id": corte.id, "profissional_id": ana.id,
-            "cliente_nome": "Maria", "cliente_telefone": "(11) 98888-7777", **extra}
+def booking(service, professional, start="10:00", date="2026-11-17", **extra):
+    return {"date": date, "start": start, "service_id": service.id, "professional_id": professional.id,
+            "client_name": "Maria", "client_phone": "(11) 98888-7777", **extra}

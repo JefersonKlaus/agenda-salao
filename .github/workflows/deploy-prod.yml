@@ -1,11 +1,11 @@
-# Produção NÃO publica sozinha: alguém aperta o botão "Run workflow" (aba Actions) na branch main.
-name: Deploy produção
+# Production does NOT deploy by itself: someone presses the "Run workflow" button (Actions tab) on the main branch.
+name: Deploy production
 
 on:
   workflow_dispatch:
     inputs:
-      confirmar:
-        description: 'Digite "producao" para confirmar'
+      confirm:
+        description: 'Type "producao" to confirm'
         required: true
         type: string
 
@@ -17,31 +17,31 @@ permissions:
   contents: read
 
 jobs:
-  guarda:
-    name: Conferir branch e confirmação
+  guard:
+    name: Check branch and confirmation
     runs-on: ubuntu-latest
     steps:
-      - name: Só a main, só com confirmação
+      - name: Only main, only with confirmation
         env:
           REF: ${{ github.ref }}
-          CONFIRMAR: ${{ inputs.confirmar }} # por variável: texto digitado nunca é colado no shell
+          CONFIRM: ${{ inputs.confirm }} # through a variable: typed text is never pasted into the shell
         run: |
           if [ "$REF" != "refs/heads/main" ]; then
-            echo "::error::Produção só publica a partir da branch main (rodou em $REF)."
+            echo "::error::Production only deploys from the main branch (ran on $REF)."
             exit 1
           fi
-          if [ "$CONFIRMAR" != "producao" ]; then
-            echo '::error::Confirmação incorreta: digite exatamente "producao".'
+          if [ "$CONFIRM" != "producao" ]; then
+            echo '::error::Wrong confirmation: type exactly "producao".'
             exit 1
           fi
 
-  testes:
-    needs: guarda
+  tests:
+    needs: guard
     uses: ./.github/workflows/ci.yml
 
   deploy:
-    needs: testes
-    uses: ./.github/workflows/deploy-reutilizavel.yml
+    needs: tests
+    uses: ./.github/workflows/deploy-reusable.yml
     with:
-      ambiente: prod
-      ambiente_github: producao
+      environment: prod
+      github_environment: producao

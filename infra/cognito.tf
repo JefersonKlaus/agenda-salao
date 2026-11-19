@@ -1,10 +1,12 @@
-resource "aws_cognito_user_pool" "salao" {
-  name                     = "${local.prefixo}-usuarios"
+resource "aws_cognito_user_pool" "salon" {
+  # Physical name kept as is ("usuarios" = users): renaming the pool would replace it and delete
+  # every login. The create-user workflow looks the pool up by this name.
+  name                     = "${local.prefix}-usuarios"
   username_attributes      = ["email"]
   auto_verified_attributes = ["email"]
-  deletion_protection      = var.ambiente == "prod" ? "ACTIVE" : "INACTIVE"
+  deletion_protection      = var.environment == "prod" ? "ACTIVE" : "INACTIVE"
 
-  # Só você cria as contas dos salões (por enquanto não há cadastro aberto).
+  # Only you create the salons' accounts (there is no open sign-up for now).
   admin_create_user_config {
     allow_admin_create_user_only = true
   }
@@ -27,9 +29,9 @@ resource "aws_cognito_user_pool" "salao" {
 }
 
 resource "aws_cognito_user_pool_client" "site" {
-  name            = "${local.prefixo}-site"
-  user_pool_id    = aws_cognito_user_pool.salao.id
-  generate_secret = false # app de navegador não guarda segredo
+  name            = "${local.prefix}-site"
+  user_pool_id    = aws_cognito_user_pool.salon.id
+  generate_secret = false # a browser app cannot keep a secret
 
   explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
 

@@ -12,20 +12,20 @@ terraform {
     }
   }
 
-  # O estado fica num bucket S3 criado à mão uma vez (veja o README).
-  # Os valores entram em `terraform init -backend-config=...`, por isso o bloco está vazio.
+  # The state lives in an S3 bucket created once by the deploy workflow (see the README).
+  # The values are passed to `terraform init -backend-config=...`, which is why the block is empty.
   backend "s3" {}
 }
 
 provider "aws" {
-  region = var.regiao
+  region = var.region
 
   default_tags {
     tags = {
-      Projeto  = var.nome
-      Ambiente = var.ambiente
+      Project     = var.name
+      Environment = var.environment
     }
   }
 }
 
-data "aws_caller_identity" "atual" {}
+data "aws_caller_identity" "current" {}

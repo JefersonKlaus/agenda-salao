@@ -1,43 +1,43 @@
-variable "nome" {
-  description = "Nome curto do sistema, usado como prefixo dos recursos."
+variable "name" {
+  description = "Short name of the system, used as the prefix of the resources."
   type        = string
   default     = "agenda-salao"
 }
 
-variable "ambiente" {
+variable "environment" {
   description = "prod, hml, dev..."
   type        = string
   default     = "prod"
 }
 
-variable "regiao" {
+variable "region" {
   type    = string
   default = "sa-east-1"
 }
 
-variable "origens_extras_cors" {
-  description = "Outras origens que podem chamar a API (ex.: http://localhost:8765 em testes)."
+variable "extra_cors_origins" {
+  description = "Other origins allowed to call the API (e.g. http://localhost:8765 in tests)."
   type        = list(string)
   default     = []
 }
 
-variable "retencao_logs_dias" {
+variable "log_retention_days" {
   type    = number
   default = 14
 }
 
-variable "limite_por_segundo" {
-  description = "Limite de requisições por segundo na API inteira (proteção contra abuso e custo)."
+variable "rate_limit_per_second" {
+  description = "Requests per second allowed across the whole API (protection against abuse and cost)."
   type        = number
   default     = 20
 }
 
-variable "rajada" {
+variable "burst_limit" {
   type    = number
   default = 40
 }
 
 locals {
-  prefixo = "${var.nome}-${var.ambiente}"
-  conta   = data.aws_caller_identity.atual.account_id
+  prefix  = "${var.name}-${var.environment}"
+  account = data.aws_caller_identity.current.account_id
 }

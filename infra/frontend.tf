@@ -1,5 +1,5 @@
 resource "aws_s3_bucket" "site" {
-  bucket = "${local.prefixo}-site-${local.conta}"
+  bucket = "${local.prefix}-site-${local.account}"
 }
 
 resource "aws_s3_bucket_public_access_block" "site" {
@@ -11,20 +11,20 @@ resource "aws_s3_bucket_public_access_block" "site" {
 }
 
 resource "aws_cloudfront_origin_access_control" "site" {
-  name                              = "${local.prefixo}-site"
+  name                              = "${local.prefix}-site"
   origin_access_control_origin_type = "s3"
   signing_behavior                  = "always"
   signing_protocol                  = "sigv4"
 }
 
-# Cabeçalhos de segurança. O CSP só deixa o site falar com ele mesmo, com o Cognito e com a API.
-resource "aws_cloudfront_response_headers_policy" "seguranca" {
-  name = "${local.prefixo}-seguranca"
+# Security headers. The CSP only lets the site talk to itself, to Cognito and to the API.
+resource "aws_cloudfront_response_headers_policy" "security" {
+  name = "${local.prefix}-seguranca" # physical name kept as is ("seguranca" = security)
 
   security_headers_config {
     content_security_policy {
       override                = true
-      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://cognito-idp.${var.regiao}.amazonaws.com https://*.execute-api.${var.regiao}.amazonaws.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self' https://cognito-idp.${var.region}.amazonaws.com https://*.execute-api.${var.region}.amazonaws.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
     }
 
     content_type_options {
@@ -67,8 +67,8 @@ resource "aws_cloudfront_distribution" "site" {
     allowed_methods            = ["GET", "HEAD"]
     cached_methods             = ["GET", "HEAD"]
     compress                   = true
-    cache_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6" # CachingOptimized (gerenciada pela AWS)
-    response_headers_policy_id = aws_cloudfront_response_headers_policy.seguranca.id
+    cache_policy_id            = "658327ea-f89d-4fab-a63d-7e88639e58f6" # CachingOptimized (managed by AWS)
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.security.id
   }
 
   restrictions {
@@ -82,7 +82,7 @@ resource "aws_cloudfront_distribution" "site" {
   }
 }
 
-data "aws_iam_policy_document" "site_so_cloudfront" {
+data "aws_iam_policy_document" "site_cloudfront_only" {
   statement {
     actions   = ["s3:GetObject"]
     resources = ["${aws_s3_bucket.site.arn}/*"]
@@ -102,5 +102,5 @@ data "aws_iam_policy_document" "site_so_cloudfront" {
 
 resource "aws_s3_bucket_policy" "site" {
   bucket = aws_s3_bucket.site.id
-  policy = data.aws_iam_policy_document.site_so_cloudfront.json
+  policy = data.aws_iam_policy_document.site_cloudfront_only.json
 }

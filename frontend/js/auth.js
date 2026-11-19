@@ -1,8 +1,10 @@
-// Login no Cognito direto pela API pública (sem biblioteca). Os tokens ficam só na sessão da aba.
+// Cognito login straight through its public API (no library). Tokens live only in the tab's session.
+// CONFIG.skipLogin is only ever set by e2e/local_server.py: there is no login and the local server
+// answers every request as the same salon. The deployed API still requires a valid token for everything.
 import { CONFIG } from "./config.js";
 
-const CHAVE = "agenda.tokens";
-const MENSAGENS = {
+const STORAGE_KEY = "agenda.tokens";
+const MESSAGES = {
   NotAuthorizedException: "E-mail ou senha incorretos.",
   UserNotFoundException: "E-mail ou senha incorretos.",
   InvalidPasswordException: "A senha precisa ter 10 caracteres, com maiúscula, minúscula e número.",
@@ -10,69 +12,67 @@ const MENSAGENS = {
   LimitExceededException: "Muitas tentativas. Espere um pouco.",
 };
 
-// `cognitoUrl` só existe no servidor de teste local (e2e/servidor_local.py); na AWS usa o endereço real.
-const URL_COGNITO = CONFIG.cognitoUrl || `https://cognito-idp.${CONFIG.regiao}.amazonaws.com/`;
-
-async function cognito(alvo, corpo) {
-  const resposta = await fetch(URL_COGNITO, {
+async function cognito(target, body) {
+  const response = await fetch(`https://cognito-idp.${CONFIG.region}.amazonaws.com/`, {
     method: "POST",
-    headers: { "Content-Type": "application/x-amz-json-1.1", "X-Amz-Target": `AWSCognitoIdentityProviderService.${alvo}` },
-    body: JSON.stringify({ ClientId: CONFIG.clienteId, ...corpo }),
+    headers: { "Content-Type": "application/x-amz-json-1.1", "X-Amz-Target": `AWSCognitoIdentityProviderService.${target}` },
+    body: JSON.stringify({ ClientId: CONFIG.clientId, ...body }),
   });
-  const dados = await resposta.json().catch(() => ({}));
-  if (!resposta.ok) {
-    const tipo = String(dados.__type || "").split("#").pop();
-    throw new Error(MENSAGENS[tipo] || "Não foi possível entrar. Tente de novo.");
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const type = String(data.__type || "").split("#").pop();
+    throw new Error(MESSAGES[type] || "Não foi possível entrar. Tente de novo.");
   }
-  return dados;
+  return data;
 }
 
-function guardar(resultado, anterior = {}) {
-  const t = { ...anterior, idToken: resultado.IdToken, expira: Date.now() + resultado.ExpiresIn * 1000 };
-  if (resultado.RefreshToken) t.refresh = resultado.RefreshToken;
-  try { sessionStorage.setItem(CHAVE, JSON.stringify(t)); } catch { /* modo privado: fica só em memória */ }
-  memoria = t;
+function store(result, previous = {}) {
+  const t = { ...previous, idToken: result.IdToken, expiresAt: Date.now() + result.ExpiresIn * 1000 };
+  if (result.RefreshToken) t.refresh = result.RefreshToken;
+  try { sessionStorage.setItem(STORAGE_KEY, JSON.stringify(t)); } catch { /* private mode: kept in memory only */ }
+  cached = t;
 }
 
-let memoria = null;
-function ler() {
-  if (memoria) return memoria;
-  try { memoria = JSON.parse(sessionStorage.getItem(CHAVE)); } catch { memoria = null; }
-  return memoria;
+let cached = null;
+function load() {
+  if (cached) return cached;
+  try { cached = JSON.parse(sessionStorage.getItem(STORAGE_KEY)); } catch { cached = null; }
+  return cached;
 }
 
-/** Devolve {desafio} se o Cognito pedir senha nova (primeiro acesso), senão guarda os tokens. */
-export async function entrar(email, senha) {
+/** Returns {challenge} if Cognito asks for a new password (first access), otherwise stores the tokens. */
+export async function signIn(email, password) {
   const r = await cognito("InitiateAuth", {
-    AuthFlow: "USER_PASSWORD_AUTH", AuthParameters: { USERNAME: email, PASSWORD: senha } });
-  if (r.ChallengeName === "NEW_PASSWORD_REQUIRED") return { desafio: { sessao: r.Session, email } };
-  guardar(r.AuthenticationResult);
+    AuthFlow: "USER_PASSWORD_AUTH", AuthParameters: { USERNAME: email, PASSWORD: password } });
+  if (r.ChallengeName === "NEW_PASSWORD_REQUIRED") return { challenge: { session: r.Session, email } };
+  store(r.AuthenticationResult);
   return {};
 }
 
-export async function definirSenhaNova({ sessao, email }, senha) {
+export async function setNewPassword({ session, email }, password) {
   const r = await cognito("RespondToAuthChallenge", {
-    ChallengeName: "NEW_PASSWORD_REQUIRED", Session: sessao,
-    ChallengeResponses: { USERNAME: email, NEW_PASSWORD: senha } });
-  guardar(r.AuthenticationResult);
+    ChallengeName: "NEW_PASSWORD_REQUIRED", Session: session,
+    ChallengeResponses: { USERNAME: email, NEW_PASSWORD: password } });
+  store(r.AuthenticationResult);
 }
 
-export const logado = () => Boolean(ler()?.idToken);
+export const isSignedIn = () => Boolean(CONFIG.skipLogin || load()?.idToken);
 
-export function sair() {
-  memoria = null;
-  try { sessionStorage.removeItem(CHAVE); } catch { /* sem armazenamento */ }
+export function signOut() {
+  cached = null;
+  try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* no storage */ }
 }
 
-/** Token válido para a API. Renova sozinho quando falta menos de 1 minuto. */
+/** A valid token for the API. Refreshes it automatically when less than 1 minute is left. */
 export async function token() {
-  const t = ler();
+  if (CONFIG.skipLogin) return "local";          // ignored by the local server
+  const t = load();
   if (!t) return null;
-  if (Date.now() < t.expira - 60_000) return t.idToken;
-  if (!t.refresh) { sair(); return null; }
+  if (Date.now() < t.expiresAt - 60_000) return t.idToken;
+  if (!t.refresh) { signOut(); return null; }
   try {
     const r = await cognito("InitiateAuth", { AuthFlow: "REFRESH_TOKEN_AUTH", AuthParameters: { REFRESH_TOKEN: t.refresh } });
-    guardar(r.AuthenticationResult, t);
-    return ler().idToken;
-  } catch { sair(); return null; }
+    store(r.AuthenticationResult, t);
+    return load().idToken;
+  } catch { signOut(); return null; }
 }

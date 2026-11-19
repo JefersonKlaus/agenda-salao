@@ -1,4 +1,4 @@
-# Todo push na branch `dev` publica sozinho na conta AWS de desenvolvimento.
+# Every push to the `dev` branch deploys automatically to the development AWS account.
 name: Deploy dev
 
 on:
@@ -13,12 +13,12 @@ permissions:
   contents: read
 
 jobs:
-  testes:
+  tests:
     uses: ./.github/workflows/ci.yml
 
   deploy:
-    needs: testes
-    uses: ./.github/workflows/deploy-reutilizavel.yml
+    needs: tests
+    uses: ./.github/workflows/deploy-reusable.yml
     with:
-      ambiente: dev
-      ambiente_github: dev
+      environment: dev
+      github_environment: dev

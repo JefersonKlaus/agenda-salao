@@ -1,112 +1,197 @@
-"""Casos de uso da agenda. Recebem o `dono` (id do salão) já validado pelo login."""
+"""Agenda use cases. They receive the `owner` (salon id) already validated by the login."""
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, Callable, Mapping
 
-from .dominio import (ID_AGENDAMENTO, MODELOS, Agendamento, Configuracao, Profissional, ler_cliente,
-                      ler_data, ler_hora, novo_id)
-from .erros import ErroValidacao, NaoEncontrado
-from .horarios import cabe_no_expediente, choca, horarios_livres, ja_passou, ocupacao
+from .domain import (APPOINTMENT_ID_RE, DAY_NAMES, MODELS, TIME_OFF_ID_RE, Appointment, Professional,
+                     Service, Settings, TimeOff, new_id, parse_client, parse_date, parse_time)
+from .errors import NotFound, ValidationError
+from .scheduling import (away_intervals, busy_intervals, fits_business_hours, free_slots, is_past,
+                         overlaps)
 
-LIMITES = {"servico": 200, "profissional": 50}
-ROTULOS = {"servico": "serviço", "profissional": "profissional"}
+MAX_RANGE_DAYS = 62                 # longest period the calendar asks for at once (a month view is 42)
+LIMITS = {"service": 200, "professional": 50}
+LABELS = {"service": "serviço", "professional": "profissional"}     # shown to the user
 
 
 class Agenda:
-    def __init__(self, repo: Any, agora: Callable[[], datetime]) -> None:
-        self.repo, self.agora = repo, agora
+    def __init__(self, repo: Any, now: Callable[[], datetime]) -> None:
+        self.repo, self.now = repo, now
 
-    # ------------------------------------------------------------ serviços e profissionais
-    def listar(self, dono: str, tipo: str) -> list[Any]:
-        return sorted(self.repo.listar(dono, tipo), key=lambda i: i.nome.lower())
+    # ------------------------------------------------------------ services and professionals
+    def list_items(self, owner: str, kind: str) -> list[Any]:
+        return sorted(self.repo.list_items(owner, kind), key=lambda i: i.name.lower())
 
-    def criar(self, dono: str, tipo: str, dados: Mapping[str, Any]) -> Any:
-        if len(self.repo.listar(dono, tipo)) >= LIMITES[tipo]:
-            raise ErroValidacao(f"limite de {LIMITES[tipo]} itens atingido")
-        item = MODELOS[tipo].de_dados(dados)
-        self._conferir_servicos(dono, item)
-        self.repo.salvar(dono, tipo, item)
+    def create(self, owner: str, kind: str, payload: Mapping[str, Any]) -> Any:
+        if len(self.repo.list_items(owner, kind)) >= LIMITS[kind]:
+            raise ValidationError(f"limite de {LIMITS[kind]} itens atingido")
+        item = MODELS[kind].from_input(payload)
+        self._check_services(owner, item)
+        self.repo.save(owner, kind, item)
         return item
 
-    def atualizar(self, dono: str, tipo: str, id: str, dados: Mapping[str, Any]) -> Any:
-        self._obter(dono, tipo, id)
-        item = MODELOS[tipo].de_dados(dados, id=id)
-        self._conferir_servicos(dono, item)
-        self.repo.salvar(dono, tipo, item)
+    def update(self, owner: str, kind: str, id: str, payload: Mapping[str, Any]) -> Any:
+        current = self._get(owner, kind, id)
+        if isinstance(current, Service) and "active" not in payload:
+            payload = {**payload, "active": current.active}        # editing does not re-enable it
+        item = MODELS[kind].from_input(payload, id=id)
+        self._check_services(owner, item)
+        self.repo.save(owner, kind, item)
         return item
 
-    def remover(self, dono: str, tipo: str, id: str) -> None:
-        self._obter(dono, tipo, id)
-        self.repo.excluir(dono, tipo, id)
-        if tipo == "servico":           # ninguém mais "faz" um serviço que não existe
-            for prof in self.repo.listar(dono, "profissional"):
-                if id in prof.servicos:
-                    self.repo.salvar(dono, "profissional", Profissional(
-                        prof.id, prof.nome, tuple(s for s in prof.servicos if s != id)))
+    def remove(self, owner: str, kind: str, id: str) -> None:
+        self._get(owner, kind, id)
+        self.repo.delete(owner, kind, id)
+        if kind == "service":           # nobody "performs" a service that no longer exists
+            for prof in self.repo.list_items(owner, "professional"):
+                if id in prof.services:
+                    self.repo.save(owner, "professional", replace(
+                        prof, services=tuple(s for s in prof.services if s != id)))
 
-    def _obter(self, dono: str, tipo: str, id: str) -> Any:
-        item = self.repo.obter(dono, tipo, id)
+    def _get(self, owner: str, kind: str, id: str) -> Any:
+        item = self.repo.get(owner, kind, id)
         if item is None:
-            raise NaoEncontrado(f"{ROTULOS[tipo]} não encontrado")
+            raise NotFound(f"{LABELS[kind]} não encontrado")
         return item
 
-    def _conferir_servicos(self, dono: str, item: Any) -> None:
-        if isinstance(item, Profissional):
-            existentes = {s.id for s in self.repo.listar(dono, "servico")}
-            if not set(item.servicos) <= existentes:
-                raise ErroValidacao("servicos: há serviço que não existe")
+    def _check_services(self, owner: str, item: Any) -> None:
+        if isinstance(item, Professional):
+            existing = {s.id for s in self.repo.list_items(owner, "service")}
+            if not set(item.services) <= existing:
+                raise ValidationError("servicos: há serviço que não existe")
+            self._check_work_hours(owner, item)
 
-    # ------------------------------------------------------------ expediente
-    def configuracao(self, dono: str) -> Configuracao:
-        return self.repo.obter_configuracao(dono) or Configuracao()
+    def _check_work_hours(self, owner: str, prof: Professional) -> None:
+        """Professionals only work inside the salon's business hours (its days, opening and closing)."""
+        settings = self.settings(owner)
+        for shift in prof.work_hours or ():
+            if shift.day not in settings.open_days:
+                raise ValidationError(f"{DAY_NAMES[shift.day]}: o salão não abre nesse dia")
+            if parse_time(shift.start) < parse_time(settings.opens) or parse_time(shift.end) > parse_time(settings.closes):
+                raise ValidationError(f"{DAY_NAMES[shift.day]}: fora do horário do salão "
+                                      f"({settings.opens}–{settings.closes})")
 
-    def salvar_configuracao(self, dono: str, dados: Mapping[str, Any]) -> Configuracao:
-        config = Configuracao.de_dados(dados)
-        self.repo.salvar_configuracao(dono, config)
-        return config
+    # ------------------------------------------------------------ business hours
+    def settings(self, owner: str) -> Settings:
+        return self.repo.get_settings(owner) or Settings()
 
-    # ------------------------------------------------------------ agendamentos
-    def disponibilidade(self, dono: str, data: str, servico_id: str, profissional_id: str) -> list[str]:
-        dia = ler_data(data)
-        servico, prof = self._servico_e_profissional(dono, servico_id, profissional_id)
-        ocupados = ocupacao(self.repo.agendamentos_do_dia(dono, data), prof.id)
-        return horarios_livres(self.configuracao(dono), dia, servico.duracao_min, ocupados, self.agora())
+    def save_settings(self, owner: str, payload: Mapping[str, Any]) -> Settings:
+        settings = Settings.from_input(payload)
+        self.repo.save_settings(owner, settings)
+        return settings
 
-    def agenda_do_dia(self, dono: str, data: str) -> list[Agendamento]:
-        ler_data(data)
-        return sorted(self.repo.agendamentos_do_dia(dono, data), key=lambda a: (a.inicio, a.profissional_nome))
+    # ------------------------------------------------------------ appointments
+    def availability(self, owner: str, date: str, service_id: str, professional_id: str) -> list[str]:
+        day = parse_date(date)
+        service, prof = self._service_and_professional(owner, service_id, professional_id)
+        self._check_active(service)
+        busy = (busy_intervals(self.repo.appointments_on_day(owner, date), prof.id)
+                + away_intervals(self.repo.time_off_between(owner, date, date), prof.id, date))
+        return free_slots(self.settings(owner), day, service.duration_min, busy, self.now(), prof)
 
-    def agendar(self, dono: str, dados: Mapping[str, Any]) -> Agendamento:
-        dia, inicio = ler_data(dados.get("data")), ler_hora(dados.get("inicio"))
-        cliente_nome, telefone = ler_cliente(dados)
-        servico, prof = self._servico_e_profissional(dono, dados.get("servico_id"),
-                                                     dados.get("profissional_id"))
-        if ja_passou(dia, inicio, self.agora()):
-            raise ErroValidacao("esse horário já passou")
-        if not cabe_no_expediente(self.configuracao(dono), dia, inicio, servico.duracao_min):
-            raise ErroValidacao("esse horário está fora do expediente do salão")
-        data = dia.isoformat()
-        ocupados = ocupacao(self.repo.agendamentos_do_dia(dono, data), prof.id)
-        if choca(inicio, inicio + servico.duracao_min, ocupados):
-            raise ErroValidacao("esse horário já está ocupado")   # a trava no banco cobre a corrida
-        ag = Agendamento(f"{data}_{inicio // 60:02d}{inicio % 60:02d}_{novo_id()}", data,
-                         dados["inicio"], servico.duracao_min, prof.id, prof.nome, servico.id,
-                         servico.nome, servico.preco_centavos, cliente_nome, telefone)
-        self.repo.criar_agendamento(dono, ag)
-        return ag
+    def day_schedule(self, owner: str, date: str) -> list[Appointment]:
+        parse_date(date)
+        return sorted(self.repo.appointments_on_day(owner, date),
+                      key=lambda a: (a.start, a.professional_name))
 
-    def cancelar(self, dono: str, id: str) -> Agendamento:
-        if not isinstance(id, str) or not ID_AGENDAMENTO.match(id):
-            raise NaoEncontrado("agendamento não encontrado")
-        ag = self.repo.cancelar_agendamento(dono, id)
-        if ag is None:
-            raise NaoEncontrado("agendamento não encontrado")
-        return ag
+    def schedule_between(self, owner: str, first: Any, last: Any) -> list[Appointment]:
+        """Appointments from `first` to `last` (inclusive): what the week and month views show."""
+        _check_period(first, last)
+        return sorted(self.repo.appointments_between(owner, first, last),
+                      key=lambda a: (a.date, a.start, a.professional_name))
 
-    def _servico_e_profissional(self, dono: str, servico_id: Any, profissional_id: Any):
-        servico = self._obter(dono, "servico", servico_id if isinstance(servico_id, str) else "")
-        prof = self._obter(dono, "profissional", profissional_id if isinstance(profissional_id, str) else "")
-        if servico.id not in prof.servicos:
-            raise ErroValidacao("essa profissional não faz esse serviço")
-        return servico, prof
+    def book(self, owner: str, payload: Mapping[str, Any]) -> Appointment:
+        day, start = parse_date(payload.get("date")), parse_time(payload.get("start"))
+        client_name, phone = parse_client(payload)
+        service, prof = self._service_and_professional(owner, payload.get("service_id"),
+                                                       payload.get("professional_id"))
+        self._check_active(service)
+        if is_past(day, start, self.now()):
+            raise ValidationError("esse horário já passou")
+        self._check_slot(owner, day, start, service.duration_min, prof)
+        date = day.isoformat()
+        appt = Appointment(f"{date}_{start // 60:02d}{start % 60:02d}_{new_id()}", date,
+                           payload["start"], service.duration_min, prof.id, prof.name, service.id,
+                           service.name, service.price_cents, client_name, phone)
+        self.repo.create_appointment(owner, appt)
+        return appt
+
+    def cancel(self, owner: str, id: str) -> Appointment:
+        if not isinstance(id, str) or not APPOINTMENT_ID_RE.match(id):
+            raise NotFound("agendamento não encontrado")
+        appt = self.repo.cancel_appointment(owner, id)
+        if appt is None:
+            raise NotFound("agendamento não encontrado")
+        return appt
+
+    def change_professional(self, owner: str, id: str, payload: Mapping[str, Any]) -> Appointment:
+        """Moves an appointment to another professional (same day, time and service)."""
+        if not isinstance(id, str) or not APPOINTMENT_ID_RE.match(id):
+            raise NotFound("agendamento não encontrado")
+        appt = self.repo.get_appointment(owner, id)
+        if appt is None:
+            raise NotFound("agendamento não encontrado")
+        professional_id = payload.get("professional_id")
+        prof = self._get(owner, "professional", professional_id if isinstance(professional_id, str) else "")
+        if prof.id == appt.professional_id:
+            raise ValidationError("o agendamento já é com essa profissional")
+        if appt.service_id not in prof.services:
+            raise ValidationError("essa profissional não faz esse serviço")
+        self._check_slot(owner, parse_date(appt.date), appt.start_min, appt.duration_min, prof)
+        moved = replace(appt, professional_id=prof.id, professional_name=prof.name)
+        self.repo.change_appointment_professional(owner, appt, moved)   # swaps the locks atomically
+        return moved
+
+    def _check_slot(self, owner: str, day: Any, start: int, duration: int, prof: Professional) -> None:
+        """Refuses a time outside the salon's hours or hers, while she is away, or already taken."""
+        settings, date = self.settings(owner), day.isoformat()
+        if not fits_business_hours(settings, day, start, duration):
+            raise ValidationError("esse horário está fora do expediente do salão")
+        if not fits_business_hours(settings, day, start, duration, prof):
+            raise ValidationError("essa profissional não trabalha nesse horário")
+        if overlaps(start, start + duration, away_intervals(self.repo.time_off_between(owner, date, date), prof.id, date)):
+            raise ValidationError("essa profissional está ausente nesse horário")
+        if overlaps(start, start + duration, busy_intervals(self.repo.appointments_on_day(owner, date), prof.id)):
+            raise ValidationError("esse horário já está ocupado")   # the lock in the database covers the race
+
+    @staticmethod
+    def _check_active(service: Service) -> None:
+        if not service.active:
+            raise ValidationError("esse serviço está desativado")
+
+    # ------------------------------------------------------------ absences (sick, travelling...)
+    def time_off_between(self, owner: str, first: Any, last: Any) -> list[TimeOff]:
+        _check_period(first, last)
+        return sorted(self.repo.time_off_between(owner, first, last), key=lambda t: (t.first_day, t.start or ""))
+
+    def create_time_off(self, owner: str, payload: Mapping[str, Any]) -> tuple[TimeOff, list[Appointment]]:
+        """Saves the absence and returns it with her appointments that fall inside it: those still
+        exist and need to be moved to someone else or cancelled."""
+        time_off = TimeOff.from_input(payload)
+        self._get(owner, "professional", time_off.professional_id)
+        self.repo.save_time_off(owner, time_off)
+        affected = [a for a in self.repo.appointments_between(owner, time_off.first_day, time_off.last_day)
+                    if a.professional_id == time_off.professional_id
+                    and overlaps(a.start_min, a.end_min, [time_off.interval_on(a.date)])]
+        return time_off, sorted(affected, key=lambda a: (a.date, a.start))
+
+    def delete_time_off(self, owner: str, id: Any) -> None:
+        if not isinstance(id, str) or not TIME_OFF_ID_RE.match(id) or not self.repo.delete_time_off(owner, id):
+            raise NotFound("ausência não encontrada")
+
+    def _service_and_professional(self, owner: str, service_id: Any, professional_id: Any):
+        service = self._get(owner, "service", service_id if isinstance(service_id, str) else "")
+        prof = self._get(owner, "professional", professional_id if isinstance(professional_id, str) else "")
+        if service.id not in prof.services:
+            raise ValidationError("essa profissional não faz esse serviço")
+        return service, prof
+
+
+def _check_period(first: Any, last: Any) -> None:
+    first_day, last_day = parse_date(first), parse_date(last)
+    if last_day < first_day:
+        raise ValidationError("período inválido: o fim vem antes do início")
+    if (last_day - first_day).days >= MAX_RANGE_DAYS:
+        raise ValidationError(f"período grande demais: no máximo {MAX_RANGE_DAYS} dias")

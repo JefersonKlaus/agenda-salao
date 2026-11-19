@@ -9,42 +9,44 @@ permissions:
 
 jobs:
   backend:
-    name: Backend (testes)
+    name: Backend (tests)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install pytest
+      - run: pip install -r requirements-dev.txt          # the same pinned versions as `python dev.py setup`
       - run: python -m pytest -q backend/tests
 
   frontend:
-    name: Frontend (sintaxe e navegador)
+    name: Frontend (syntax, unit tests and browser)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-      - name: Conferir a sintaxe dos módulos JS
+      - name: Check the syntax of the JS modules
         run: |
           mkdir -p "$RUNNER_TEMP/js"
-          for f in frontend/js/*.js frontend/js/telas/*.js; do
+          for f in frontend/js/*.js frontend/js/screens/*.js; do
             cp "$f" "$RUNNER_TEMP/js/$(echo "$f" | tr / _).mjs"
             node --check "$RUNNER_TEMP/js/$(echo "$f" | tr / _).mjs"
           done
+      - name: Calendar unit tests
+        run: node --test frontend/tests/*.test.mjs
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Teste de ponta a ponta (Chromium + API local em memória)
+      - name: End-to-end test (Chromium + local in-memory API)
         run: |
-          pip install playwright
+          pip install -r requirements-dev.txt
           playwright install --with-deps chromium
-          python e2e/teste_e2e.py
+          python e2e/run_e2e.py
 
   infra:
-    name: Terraform (formato e validação)
+    name: Terraform (format and validation)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -54,7 +56,7 @@ jobs:
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.10.5"
-      # Só avisa: se o formato estiver fora do padrão, não trava o deploy.
-      - run: terraform fmt -check -recursive -diff || echo "::warning::Formato do Terraform fora do padrão (não bloqueia)."
+      # Warning only: if the formatting is off, it does not block the deploy.
+      - run: terraform fmt -check -recursive -diff || echo "::warning::Terraform formatting is off (not blocking)."
       - run: terraform init -backend=false -input=false
       - run: terraform validate

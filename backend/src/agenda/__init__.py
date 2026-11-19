@@ -1,1 +1,1 @@
-"""Agenda de salão de beleza: regras de negócio, sem dependência de AWS."""
+"""Beauty salon agenda: business rules, with no dependency on AWS."""

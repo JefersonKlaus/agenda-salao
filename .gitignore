@@ -2,12 +2,12 @@ __pycache__/
 .pytest_cache/
 .venv/
 node_modules/
-# Terraform: estado e arquivos locais nunca vão para o GitHub
+# Terraform: state and local files never go to GitHub
 .terraform/
 *.tfstate
 *.tfstate.*
 infra/build/
 terraform.tfvars
 *.auto.tfvars
-# frontend/js/config.js é gerado no deploy; o do repositório é só um modelo vazio
+# frontend/js/config.js is generated at deploy time; the one in the repository is just an empty template
 .env

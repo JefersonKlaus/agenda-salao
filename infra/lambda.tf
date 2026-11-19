@@ -5,7 +5,7 @@ data "archive_file" "backend" {
   excludes    = ["**/__pycache__/**"]
 }
 
-data "aws_iam_policy_document" "lambda_confia" {
+data "aws_iam_policy_document" "lambda_trust" {
   statement {
     actions = ["sts:AssumeRole"]
 
@@ -17,12 +17,12 @@ data "aws_iam_policy_document" "lambda_confia" {
 }
 
 resource "aws_iam_role" "lambda" {
-  name               = "${local.prefixo}-lambda"
-  assume_role_policy = data.aws_iam_policy_document.lambda_confia.json
+  name               = "${local.prefix}-lambda"
+  assume_role_policy = data.aws_iam_policy_document.lambda_trust.json
 }
 
-# Só o que a função usa: ler, gravar e apagar itens desta tabela. Nada de Scan nem de outras tabelas.
-data "aws_iam_policy_document" "lambda_acesso" {
+# Only what the function uses: read, write and delete items in this table. No Scan, no other tables.
+data "aws_iam_policy_document" "lambda_access" {
   statement {
     actions = [
       "dynamodb:GetItem",
@@ -35,10 +35,10 @@ data "aws_iam_policy_document" "lambda_acesso" {
   }
 }
 
-resource "aws_iam_role_policy" "lambda_dados" {
-  name   = "dados"
+resource "aws_iam_role_policy" "lambda_data" {
+  name   = "dados" # inline policy name kept as is ("dados" = data), so it is not recreated
   role   = aws_iam_role.lambda.id
-  policy = data.aws_iam_policy_document.lambda_acesso.json
+  policy = data.aws_iam_policy_document.lambda_access.json
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_logs" {
@@ -47,12 +47,12 @@ resource "aws_iam_role_policy_attachment" "lambda_logs" {
 }
 
 resource "aws_cloudwatch_log_group" "lambda" {
-  name              = "/aws/lambda/${local.prefixo}-api"
-  retention_in_days = var.retencao_logs_dias
+  name              = "/aws/lambda/${local.prefix}-api"
+  retention_in_days = var.log_retention_days
 }
 
 resource "aws_lambda_function" "api" {
-  function_name    = "${local.prefixo}-api"
+  function_name    = "${local.prefix}-api"
   role             = aws_iam_role.lambda.arn
   runtime          = "python3.12"
   architectures    = ["arm64"]
@@ -64,7 +64,7 @@ resource "aws_lambda_function" "api" {
 
   environment {
     variables = {
-      TABELA = aws_dynamodb_table.agenda.name
+      TABLE_NAME = aws_dynamodb_table.agenda.name
     }
   }
 

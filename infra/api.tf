@@ -1,16 +1,16 @@
 resource "aws_apigatewayv2_api" "api" {
-  name          = "${local.prefixo}-api"
+  name          = "${local.prefix}-api"
   protocol_type = "HTTP"
 
   cors_configuration {
-    allow_origins = concat(["https://${aws_cloudfront_distribution.site.domain_name}"], var.origens_extras_cors)
+    allow_origins = concat(["https://${aws_cloudfront_distribution.site.domain_name}"], var.extra_cors_origins)
     allow_methods = ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
     allow_headers = ["authorization", "content-type"]
     max_age       = 3600
   }
 }
 
-# O API Gateway confere assinatura, validade e público do token ANTES de chamar a Lambda.
+# API Gateway checks the token's signature, expiry and audience BEFORE calling the Lambda.
 resource "aws_apigatewayv2_authorizer" "jwt" {
   api_id           = aws_apigatewayv2_api.api.id
   name             = "cognito"
@@ -18,7 +18,7 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
   identity_sources = ["$request.header.Authorization"]
 
   jwt_configuration {
-    issuer   = "https://cognito-idp.${var.regiao}.amazonaws.com/${aws_cognito_user_pool.salao.id}"
+    issuer   = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.salon.id}"
     audience = [aws_cognito_user_pool_client.site.id]
   }
 }
@@ -30,7 +30,7 @@ resource "aws_apigatewayv2_integration" "lambda" {
   payload_format_version = "2.0"
 }
 
-resource "aws_apigatewayv2_route" "todas" {
+resource "aws_apigatewayv2_route" "catch_all" {
   api_id             = aws_apigatewayv2_api.api.id
   route_key          = "ANY /{proxy+}"
   target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
@@ -39,34 +39,34 @@ resource "aws_apigatewayv2_route" "todas" {
 }
 
 resource "aws_cloudwatch_log_group" "api" {
-  name              = "/aws/apigateway/${local.prefixo}"
-  retention_in_days = var.retencao_logs_dias
+  name              = "/aws/apigateway/${local.prefix}"
+  retention_in_days = var.log_retention_days
 }
 
-resource "aws_apigatewayv2_stage" "padrao" {
+resource "aws_apigatewayv2_stage" "default_stage" {
   api_id      = aws_apigatewayv2_api.api.id
   name        = "$default"
   auto_deploy = true
 
   default_route_settings {
-    throttling_rate_limit  = var.limite_por_segundo
-    throttling_burst_limit = var.rajada
+    throttling_rate_limit  = var.rate_limit_per_second
+    throttling_burst_limit = var.burst_limit
   }
 
   access_log_settings {
     destination_arn = aws_cloudwatch_log_group.api.arn
     format = jsonencode({
-      requestId = "$context.requestId"
-      ip        = "$context.identity.sourceIp"
-      metodo    = "$context.httpMethod"
-      caminho   = "$context.path"
-      status    = "$context.status"
-      duracaoMs = "$context.responseLatency"
+      requestId  = "$context.requestId"
+      ip         = "$context.identity.sourceIp"
+      method     = "$context.httpMethod"
+      path       = "$context.path"
+      status     = "$context.status"
+      durationMs = "$context.responseLatency"
     })
   }
 }
 
-resource "aws_lambda_permission" "api_chama_lambda" {
+resource "aws_lambda_permission" "api_invokes_lambda" {
   statement_id  = "AllowAPIGateway"
   action        = "lambda:InvokeFunction"
   function_name = aws_lambda_function.api.function_name

@@ -1,68 +1,90 @@
-// Ajudantes pequenos. O texto vindo do usuário SEMPRE entra como texto (nunca como HTML).
+// Small helpers. Text coming from the user ALWAYS goes in as text (never as HTML).
 
-export function h(tag, props = {}, ...filhos) {
+export function h(tag, props = {}, ...children) {
   const el = document.createElement(tag);
-  for (const [chave, valor] of Object.entries(props)) {
-    if (valor === false || valor == null) continue;
-    if (chave.startsWith("on")) el.addEventListener(chave.slice(2), valor);
-    else if (chave in el && chave !== "list") el[chave] = valor;
-    else el.setAttribute(chave, valor === true ? "" : valor);
+  for (const [key, value] of Object.entries(props)) {
+    if (value === false || value == null) continue;
+    if (key.startsWith("on")) el.addEventListener(key.slice(2), value);
+    else if (key in el && key !== "list") el[key] = value;
+    else el.setAttribute(key, value === true ? "" : value);
   }
-  for (const filho of filhos.flat(Infinity)) {
-    if (filho == null || filho === false) continue;
-    el.append(filho instanceof Node ? filho : document.createTextNode(String(filho)));
+  for (const child of children.flat(Infinity)) {
+    if (child == null || child === false) continue;
+    el.append(child instanceof Node ? child : document.createTextNode(String(child)));
   }
   return el;
 }
 
-export function mostrar(container, ...filhos) {
-  container.replaceChildren(...filhos.flat(Infinity).filter(Boolean));
+export function render(container, ...children) {
+  container.replaceChildren(...children.flat(Infinity).filter(Boolean));
 }
 
-export function aviso(texto, erro = false) {
-  const el = h("div", { className: "toast" + (erro ? " erro" : "") }, texto);
-  document.getElementById("avisos").append(el);
-  setTimeout(() => el.remove(), erro ? 6000 : 3000);
+export function notify(text, isError = false) {
+  const el = h("div", { className: "toast" + (isError ? " error" : "") }, text);
+  document.getElementById("toasts").append(el);
+  setTimeout(() => el.remove(), isError ? 6000 : 3000);
 }
 
-export const moeda = (centavos) =>
-  (centavos / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+export const formatMoney = (cents) =>
+  (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-/** "80,50" ou "1.200" -> centavos inteiros. Devolve null se não for um valor. */
-export function paraCentavos(texto) {
-  const limpo = String(texto).trim().replace(/\s/g, "").replace("R$", "");
-  if (!/^\d{1,3}(\.\d{3})*(,\d{1,2})?$|^\d+(,\d{1,2})?$/.test(limpo)) return null;
-  const [reais, centavos = ""] = limpo.replace(/\./g, "").split(",");
-  return Number(reais) * 100 + Number(centavos.padEnd(2, "0"));
+/** "80,50" or "1.200" (Brazilian format) -> integer cents. Returns null if it is not an amount. */
+export function toCents(text) {
+  const cleaned = String(text).trim().replace(/\s/g, "").replace("R$", "");
+  if (!/^\d{1,3}(\.\d{3})*(,\d{1,2})?$|^\d+(,\d{1,2})?$/.test(cleaned)) return null;
+  const [whole, cents = ""] = cleaned.replace(/\./g, "").split(",");
+  return Number(whole) * 100 + Number(cents.padEnd(2, "0"));
 }
 
-export function hoje() {
-  const d = new Date();
-  return [d.getFullYear(), String(d.getMonth() + 1).padStart(2, "0"), String(d.getDate()).padStart(2, "0")].join("-");
+// The salon's clock: Brasília, UTC-3 all year (no daylight saving time since 2019), exactly like the
+// backend's (backend/src/agenda/clock.py). The device's own time zone does not matter.
+const SALON_UTC_OFFSET_MIN = -3 * 60;
+
+/** The salon's current date ("YYYY-MM-DD") and time in minutes since midnight. */
+export function salonNow(at = new Date()) {
+  const shifted = new Date(at.getTime() + SALON_UTC_OFFSET_MIN * 60_000);
+  return { date: shifted.toISOString().slice(0, 10), minutes: shifted.getUTCHours() * 60 + shifted.getUTCMinutes() };
 }
 
-export function somarDias(iso, dias) {
-  const [a, m, d] = iso.split("-").map(Number);
-  const nova = new Date(a, m - 1, d + dias);
-  return [nova.getFullYear(), String(nova.getMonth() + 1).padStart(2, "0"), String(nova.getDate()).padStart(2, "0")].join("-");
+export const today = () => salonNow().date;
+
+export function addDays(iso, days) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const result = new Date(y, m - 1, d + days);
+  return [result.getFullYear(), String(result.getMonth() + 1).padStart(2, "0"), String(result.getDate()).padStart(2, "0")].join("-");
 }
 
-export function dataBonita(iso) {
-  const [a, m, d] = iso.split("-").map(Number);
-  const texto = new Date(a, m - 1, d).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
-  return texto.charAt(0).toUpperCase() + texto.slice(1);
+export function prettyDate(iso) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const text = new Date(y, m - 1, d).toLocaleDateString("pt-BR", { weekday: "long", day: "2-digit", month: "long" });
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-export function somarMinutos(hora, minutos) {
-  const [h_, m] = hora.split(":").map(Number);
-  const total = h_ * 60 + m + minutos;
+export function addMinutes(time, minutes) {
+  const [hh, mm] = time.split(":").map(Number);
+  const total = hh * 60 + mm + minutes;
   return `${String(Math.floor(total / 60)).padStart(2, "0")}:${String(total % 60).padStart(2, "0")}`;
 }
 
-export const duracaoTexto = (min) => (min >= 60 ? `${Math.floor(min / 60)} h` : "") + (min % 60 ? ` ${min % 60} min` : "");
+export const durationText = (min) => (min >= 60 ? `${Math.floor(min / 60)} h` : "") + (min % 60 ? ` ${min % 60} min` : "");
 
-/** Roda uma ação com o botão travado, para não enviar duas vezes com cliques repetidos. */
-export async function travar(botao, acao) {
-  botao.disabled = true;
-  try { return await acao(); } finally { botao.disabled = false; }
+/** Runs an action with the button disabled, so repeated clicks don't send it twice. */
+export async function whileDisabled(button, action) {
+  button.disabled = true;
+  try { return await action(); } finally { button.disabled = false; }
+}
+
+/** Opens a modal <dialog> (like Google Calendar's pop-ups). It is removed from the page when closed;
+ *  clicking outside it closes it too. */
+export function openDialog(title, ...children) {
+  const dialog = h("dialog", { className: "dialog" }, h("h2", {}, title), ...children);
+  dialog.addEventListener("click", (e) => {          // the backdrop counts as the <dialog> itself
+    const r = dialog.getBoundingClientRect();
+    const outside = e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+    if (e.target === dialog && outside) dialog.close();
+  });
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+  return dialog;
 }

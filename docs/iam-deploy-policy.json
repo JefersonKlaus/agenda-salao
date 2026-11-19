@@ -2,19 +2,19 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Sid": "DadosDynamoDB",
+      "Sid": "DynamoDBData",
       "Effect": "Allow",
       "Action": "dynamodb:*",
       "Resource": "arn:aws:dynamodb:*:*:table/agenda-salao-*"
     },
     {
-      "Sid": "FuncaoLambda",
+      "Sid": "LambdaFunction",
       "Effect": "Allow",
       "Action": "lambda:*",
       "Resource": "arn:aws:lambda:*:*:function:agenda-salao-*"
     },
     {
-      "Sid": "LogsDoProjeto",
+      "Sid": "ProjectLogs",
       "Effect": "Allow",
       "Action": "logs:*",
       "Resource": [
@@ -25,7 +25,7 @@
       ]
     },
     {
-      "Sid": "LogsGerais",
+      "Sid": "GeneralLogs",
       "Effect": "Allow",
       "Action": [
         "logs:DescribeLogGroups",
@@ -42,7 +42,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "UsuariosCognito",
+      "Sid": "CognitoUsers",
       "Effect": "Allow",
       "Action": "cognito-idp:*",
       "Resource": "*"
@@ -60,7 +60,7 @@
       "Resource": "*"
     },
     {
-      "Sid": "SiteEEstadoNoS3",
+      "Sid": "SiteAndStateInS3",
       "Effect": "Allow",
       "Action": "s3:*",
       "Resource": [
@@ -71,7 +71,7 @@
       ]
     },
     {
-      "Sid": "RolesDoProjeto",
+      "Sid": "ProjectRoles",
       "Effect": "Allow",
       "Action": [
         "iam:CreateRole",
@@ -92,7 +92,7 @@
       "Resource": "arn:aws:iam::*:role/agenda-salao-*"
     },
     {
-      "Sid": "SoOLogBasicoDaLambda",
+      "Sid": "OnlyLambdaBasicLogging",
       "Effect": "Allow",
       "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
       "Resource": "arn:aws:iam::*:role/agenda-salao-*",

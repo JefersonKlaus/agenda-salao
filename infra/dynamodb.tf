@@ -1,5 +1,6 @@
 resource "aws_dynamodb_table" "agenda" {
-  name         = "${local.prefixo}-dados"
+  # Physical name kept as is ("dados" = data): renaming the table would replace it and lose its data.
+  name         = "${local.prefix}-dados"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "PK"
   range_key    = "SK"
@@ -22,5 +23,5 @@ resource "aws_dynamodb_table" "agenda" {
     enabled = true
   }
 
-  deletion_protection_enabled = var.ambiente == "prod"
+  deletion_protection_enabled = var.environment == "prod"
 }

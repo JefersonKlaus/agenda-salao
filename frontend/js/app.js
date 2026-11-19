@@ -1,55 +1,78 @@
 import { CONFIG } from "./config.js";
-import { definirSenhaNova, entrar, logado, sair } from "./auth.js";
-import { aviso, h, mostrar, travar } from "./util.js";
-import { montar as agenda } from "./telas/agenda.js";
-import { montar as configuracao } from "./telas/configuracao.js";
-import { profissionais, servicos } from "./telas/cadastros.js";
+import { isSignedIn, setNewPassword, signIn, signOut } from "./auth.js";
+import { h, notify, render, whileDisabled } from "./util.js";
+import { mount as agenda } from "./screens/agenda.js";
+import { mount as settings } from "./screens/settings.js";
+import { professionals, services } from "./screens/catalog.js";
 
-const conteudo = document.getElementById("conteudo");
-const TELAS = [["Agenda", agenda], ["Serviços", servicos], ["Profissionais", profissionais], ["Horários", configuracao]];
+const content = document.getElementById("content");
+const SCREENS = [["Agenda", agenda], ["Serviços", services], ["Profissionais", professionals], ["Configurações", settings]];
 
-function telaLogin(desafio = null) {
-  const email = h("input", { id: "l-email", type: "email", autocomplete: "username", required: true, value: desafio?.email || "" });
-  const senha = h("input", { id: "l-senha", type: "password", required: true,
-    autocomplete: desafio ? "new-password" : "current-password" });
-  const botao = h("button", { className: "primario", type: "submit" }, desafio ? "Definir senha" : "Entrar");
-  const form = h("form", { className: "cartao login" },
+function loginScreen(challenge = null) {
+  const email = h("input", { id: "l-email", type: "email", autocomplete: "username", required: true, value: challenge?.email || "" });
+  const password = h("input", { id: "l-password", type: "password", required: true,
+    autocomplete: challenge ? "new-password" : "current-password" });
+  const button = h("button", { className: "primary", type: "submit" }, challenge ? "Definir senha" : "Entrar");
+  const form = h("form", { className: "card login" },
     h("h1", {}, "Agenda do Salão"),
-    desafio && h("p", { className: "suave" }, "Primeiro acesso: escolha a sua senha (10+ caracteres, com maiúscula, minúscula e número)."),
-    !desafio && [h("label", { htmlFor: "l-email" }, "E-mail"), email],
-    h("label", { htmlFor: "l-senha" }, desafio ? "Nova senha" : "Senha"), senha,
-    h("div", { className: "acoes" }, botao));
+    challenge && h("p", { className: "muted" }, "Primeiro acesso: escolha a sua senha (10+ caracteres, com maiúscula, minúscula e número)."),
+    !challenge && [h("label", { htmlFor: "l-email" }, "E-mail"), email],
+    h("label", { htmlFor: "l-password" }, challenge ? "Nova senha" : "Senha"), password,
+    h("div", { className: "actions" }, button));
   form.addEventListener("submit", (e) => {
     e.preventDefault();
-    travar(botao, async () => {
+    whileDisabled(button, async () => {
       try {
-        if (desafio) { await definirSenhaNova(desafio, senha.value); return iniciar(); }
-        const r = await entrar(email.value.trim(), senha.value);
-        if (r.desafio) return telaLogin(r.desafio);
-        iniciar();
-      } catch (erro) { aviso(erro.message, true); }
+        if (challenge) { await setNewPassword(challenge, password.value); return start(); }
+        const r = await signIn(email.value.trim(), password.value);
+        if (r.challenge) return loginScreen(r.challenge);
+        start();
+      } catch (error) { notify(error.message, true); }
     });
   });
-  mostrar(conteudo, form);
-  (desafio ? senha : email).focus();
+  render(content, form);
+  (challenge ? password : email).focus();
 }
 
-function iniciar() {
-  const topo = document.getElementById("topo");
+function start() {
+  const topBar = document.getElementById("top-bar");
+  const sidebar = document.getElementById("sidebar");
+  const backdrop = document.getElementById("backdrop");
+  const toggle = document.getElementById("menu-toggle");
   const menu = document.getElementById("menu");
-  topo.hidden = false;
-  const abrir = (indice) => {
-    [...menu.children].forEach((b, i) => (i === indice ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
-    const area = h("div");
-    mostrar(conteudo, area);
-    TELAS[indice][1](area);
+  topBar.hidden = sidebar.hidden = false;
+  document.body.classList.add("signed-in");
+
+  // On phones the sidebar is a drawer: ☰ opens it; choosing a page, the backdrop or Esc closes it.
+  const setDrawer = (open) => {
+    sidebar.classList.toggle("open", open);
+    backdrop.hidden = !open;
+    toggle.setAttribute("aria-expanded", String(open));
+    toggle.setAttribute("aria-label", open ? "Fechar menu" : "Abrir menu");
+    if (open) menu.querySelector("[aria-current]")?.focus();
   };
-  mostrar(menu, TELAS.map(([nome], i) => h("button", { onclick: () => abrir(i) }, nome)));
-  document.getElementById("sair").onclick = () => { sair(); location.reload(); };
-  abrir(0);
+  toggle.onclick = () => setDrawer(!sidebar.classList.contains("open"));
+  backdrop.onclick = () => setDrawer(false);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && sidebar.classList.contains("open")) { setDrawer(false); toggle.focus(); }
+  });
+
+  const open = (index) => {
+    [...menu.children].forEach((b, i) => (i === index ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
+    setDrawer(false);
+    const area = h("div");
+    render(content, area);
+    SCREENS[index][1](area);
+  };
+  render(menu, SCREENS.map(([name], i) => h("button", { onclick: () => open(i) }, name)));
+  const logout = document.getElementById("logout");
+  if (CONFIG.skipLogin) {                        // local server: there is nobody to log out
+    logout.replaceWith(h("span", { id: "local-mode", className: "muted" }, "Modo local, sem login"));
+  } else logout.onclick = () => { signOut(); location.reload(); };
+  open(0);
 }
 
-if (!CONFIG.apiUrl || !CONFIG.clienteId) {
-  mostrar(conteudo, h("p", { className: "aviso" }, "Sistema ainda não configurado (js/config.js vazio)."));
-} else if (logado()) iniciar();
-else telaLogin();
+if (!CONFIG.apiUrl || (!CONFIG.clientId && !CONFIG.skipLogin)) {
+  render(content, h("p", { className: "notice" }, "Sistema ainda não configurado (js/config.js vazio)."));
+} else if (isSignedIn()) start();
+else loginScreen();
