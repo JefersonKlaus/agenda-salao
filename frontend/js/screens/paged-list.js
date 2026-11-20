@@ -14,8 +14,9 @@ const SEARCH_FROM = 6;                          // a search field from this many
 const plain = (text) => text.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase();
 
 /** `items` with their `name`; `row(item)` draws one <li class="list-item">. `label`: what the list
- *  holds, for the search's placeholder ("serviços"). */
-export function pagedList(items, row, { label }) {
+ *  holds, for the search's placeholder ("serviços"). `searchText(item)`: what the search looks at
+ *  (the name, unless told otherwise: clients are also found by phone). */
+export function pagedList(items, row, { label, searchText = (item) => item.name }) {
   let page = 0, shown = items;
   const list = h("ul", { className: "item-list" });
   const nothingFound = h("p", { className: "muted list-empty", hidden: true }, "Nada encontrado.");
@@ -40,7 +41,7 @@ export function pagedList(items, row, { label }) {
     placeholder: `Buscar ${label}`, "aria-label": `Buscar ${label}`,
     oninput: (e) => {
       const wanted = plain(e.target.value.trim());
-      shown = wanted ? items.filter((item) => plain(item.name).includes(wanted)) : items;
+      shown = wanted ? items.filter((item) => plain(searchText(item)).includes(wanted)) : items;
       page = 0;
       draw();
     } });

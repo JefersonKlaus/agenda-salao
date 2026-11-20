@@ -107,6 +107,7 @@ button.icon:hover, .tg-day-head:hover .tg-date, .mv-date:hover { background: var
   background: var(--surface); font: inherit; font-size: .9rem; color: var(--text); cursor: pointer; }
 .pill .dot { margin-right: 6px; }
 .pill[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-light); color: var(--brand); font-weight: 600; }
+.cal-filter .filter-count { align-self: center; font-size: .85rem; margin-left: 4px; }
 
 .tg { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-x: auto; }
 .tg-head, .tg-grid { display: grid; }          /* columns set by agenda.js: days, or one per professional */
@@ -290,3 +291,27 @@ button.link { border: 0; background: none; padding: 2px 0; font: inherit; color:
 .pager:empty { display: none; }
 .pager > .muted { margin-right: auto; }
 .pager-page { min-width: 4.5rem; text-align: center; font-variant-numeric: tabular-nums; }
+
+/* payment on the agenda: ✓ paid, R$ amber = happened and not paid, R$ gray = still ahead */
+.pay { display: inline-block; flex: none; padding: 0 4px; border-radius: 8px; font-size: .62rem; font-weight: 700;
+  line-height: 1.5; vertical-align: middle; background: #fff; }
+.pay.paid { color: var(--ok); }
+.pay.late { color: #fff; background: #b7791f; }
+.pay.due { color: #6f6577; }
+.tg-event .pay { position: absolute; top: 2px; right: 3px; }
+.tg-event { padding-right: 26px; }                       /* room for the mark */
+.mv-chip .pay { margin-right: 3px; font-size: .58rem; }
+.pay-legend { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 14px; margin: -4px 0 10px; font-size: .8rem; }
+.pay-legend .pay { border: 1px solid var(--border); }
+
+/* Clientes */
+.list-item.clickable { cursor: pointer; }
+.list-item.clickable:hover, .list-item.clickable:focus-visible { background: var(--brand-light); outline: none; }
+.chevron { color: var(--muted); font-size: 1.3rem; padding: 0 6px; }
+button.link.back { padding-left: 0; color: var(--brand); }
+.totals.four { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 640px) { .totals.four { grid-template-columns: 1fr 1fr; } }
+.history .pay { font-size: .72rem; padding: 1px 8px; }
+.history th:nth-child(2), .history td:nth-child(2), .history th:nth-child(3), .history td:nth-child(3) { text-align: left; }
+.client-note { margin: 4px 0 0; font-size: .85rem; }
+.client-note:empty { display: none; }

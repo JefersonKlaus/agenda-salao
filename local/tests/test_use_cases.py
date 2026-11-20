@@ -94,6 +94,7 @@ def test_two_professionals_can_work_at_the_same_time(agenda, salon):
     ({"date": "tomorrow"}, "data inválida"),
     ({"client_name": ""}, "cliente_nome"),
     ({"client_phone": "123"}, "DDD"),
+    ({"client_phone": ""}, "telefone"),                                 # required: it registers the client
 ])
 def test_refused_bookings(agenda, salon, extra, fragment):
     haircut, _, ana = salon

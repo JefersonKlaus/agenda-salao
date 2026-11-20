@@ -1,0 +1,4 @@
+{
+  "route": "GET /clients",
+  "database": "read"
+}

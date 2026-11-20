@@ -77,7 +77,7 @@ def run():
         expect(page.locator("text=Primeiro acesso")).to_be_visible()
         page.fill("#l-password", "Another-Password-9")
         page.click("text=Definir senha")
-        expect(page.locator("#menu button")).to_have_count(4)
+        expect(page.locator("#menu button")).to_have_count(5)            # Agenda, Clientes, Serviços, Profissionais, Financeiro
 
         # service with a malicious name: it must show up as text, without running anything
         page.click("nav >> text=Serviços")
@@ -173,6 +173,8 @@ def run():
         expect(page.locator(".slots button[aria-pressed=true]")).to_have_text("12:00")
         times = page.locator(".slots button").all_inner_texts()
         assert "10:00" in times and "09:00" not in times and "13:15" not in times, times
+        page.fill("#f-phone", "(11) 97777-6666")                     # a new client: registered on booking
+        expect(page.locator(".client-note")).to_have_text("Cliente nova: é cadastrada ao agendar.")
         page.fill("#f-name", "Joana")
         page.click("button:text-is('Agendar')")
         expect(bia_column.locator(".tg-event")).to_contain_text("12:00 Joana")
@@ -186,6 +188,7 @@ def run():
         for absent in ("10:00", "10:30", "09:00", "13:15"):
             assert absent not in times, (absent, times)
         assert "13:00" in times, times
+        page.fill("#f-phone", "(11) 95555-4444")
         page.fill("#f-name", "Luana")
         page.click("button:text-is('Agendar')")
         expect(page.locator(".tg-event")).to_have_count(3)
@@ -232,6 +235,20 @@ def run():
         expect(page.locator(".away-chip")).to_have_count(0)
         page.click(".segmented >> text=Dia")
         expect(page.locator(".tg-person")).to_have_text(["Ana", "Bia"])
+
+        # the filter picks one, some or all: each name turns on and off
+        page.click(".cal-filter >> text=Bia")
+        expect(page.locator(".tg-col")).to_have_count(1)                     # just Bia: her own agenda
+        page.click(".cal-filter >> text=Ana")
+        expect(page.locator(".tg-person")).to_have_text(["Ana", "Bia"])
+        expect(page.locator(".cal-filter .pill[aria-pressed=true]")).to_have_text(["Ana", "Bia"])
+        expect(page.locator(".cal-filter")).to_contain_text("2 de 3")
+        page.click(".cal-filter >> text=Carla")                               # all three: the same as "Todas"
+        expect(page.locator(".cal-filter .pill[aria-pressed=true]")).to_have_text(["Todas"])
+        page.click(".cal-filter >> text=Carla")                               # Carla alone: she does not work today
+        expect(page.locator(".tg-col")).to_have_count(1)
+        page.click(".cal-filter >> text=Todas")
+        expect(page.locator(".tg-person")).to_have_text(["Ana", "Bia"])
         page.click(".segmented >> text=Semana")
 
         # month view: same appointments, tomorrow not marked closed
@@ -241,10 +258,11 @@ def run():
 
         # open an appointment and cancel it: it frees the slot
         page.locator(".mv-chip", has_text="10:00 Maria").click()
-        expect(page.locator("dialog")).to_contain_text("11988887777")
+        expect(page.locator("dialog")).to_contain_text("(11) 98888-7777")      # shown formatted
         page.click("dialog >> text=Cancelar agendamento")
         expect(page.locator(".mv-chip")).to_have_count(2)
-        expect(page.locator(".mv-chip")).to_have_text(["11:00 Luana", "12:00 Joana"])   # name hidden on phones
+        expect(page.locator(".mv-chip")).to_have_text([re.compile("11:00 Luana$"), re.compile("12:00 Joana$")])  # name hidden on phones
+        expect(page.locator(".mv-chip .pay.due")).to_have_count(2)        # tomorrow, not paid yet: gray R$
 
         # phone-sized screen: the menu is a drawer behind the ☰ button
         page.set_viewport_size({"width": 390, "height": 844})
@@ -357,6 +375,8 @@ def run_without_login():
         page.select_option("#f-professional", index=1)
         page.click(".slots button:text-is('10:00')")
         page.fill("#f-name", "Maria")
+        expect(page.locator("button:text-is('Agendar')")).to_be_disabled()   # the phone is required: her key
+        page.fill("#f-phone", "(11) 98888-7777")
         page.click("button:text-is('Agendar')")
         expect(page.locator(".tg-event")).to_contain_text("10:00 Maria")
 
@@ -594,7 +614,7 @@ def run_finance():
         page.on("pageerror", lambda e: errors.append(str(e)))
         page.on("console", lambda m: m.type == "error" and errors.append(m.text))
         page.goto(url_of(server))
-        expect(page.locator("#menu button")).to_have_text(["Agenda", "Serviços", "Profissionais", "Financeiro"])
+        expect(page.locator("#menu button")).to_have_text(["Agenda", "Clientes", "Serviços", "Profissionais", "Financeiro"])
         expect(page.locator("#settings-group .nav-group-title")).to_have_text("Configurações")   # at the bottom
         expect(page.locator("#settings-menu button")).to_have_text(["Funcionamento", "Acessos"])
         page.click("nav >> text=Financeiro")
@@ -626,12 +646,31 @@ def run_finance():
         expect(duda).to_contain_text("30%")
         expect(duda).to_contain_text("R$ 12,50")
 
+        # the agenda marks each appointment: ✓ paid, amber R$ happened and not paid, gray R$ still ahead
+        page.click("nav >> text=Agenda")
+        page.click(".segmented >> text=Semana")
+        expect(page.locator(".pay-legend")).to_be_visible()
+        page.click("[aria-label='Semana anterior']")                    # all of it already happened
+        expect(page.locator(".cal-body.loading")).to_have_count(0)
+        expect(page.locator(".tg-event .pay.paid").first).to_be_visible()
+        assert page.locator(".tg-event .pay.late").count() > 0, "the demo leaves some past ones unpaid"
+        assert page.locator(".tg-event .pay.due").count() == 0
+        page.click("text=Hoje")
+        page.click("[aria-label='Próxima semana']")                     # all of it still ahead
+        expect(page.locator(".cal-body.loading")).to_have_count(0)
+        expect(page.locator(".cal-title")).not_to_have_text(re.compile(r"^$"))
+        expect(page.locator(".tg-event .pay.late")).to_have_count(0)   # waits for next week's appointments
+        expect(page.locator(".tg-event .pay.due").first).to_be_visible()
+        assert page.locator(".tg-event .pay.late").count() == 0 and page.locator(".tg-event .pay.paid").count() == 0
+        page.click("text=Hoje")
+
         # the manager opens the booking on a past time (employees cannot: see run_now_marker)
         page.click("nav >> text=Agenda")
         page.click(".segmented >> text=Dia")
         page.click("[aria-label='Dia anterior']")
         free = page.locator(".tg-col").first
         expect(free).to_be_visible()
+        expect(page.locator(".cal-body.loading")).to_have_count(0)        # yesterday's appointments are in
         page.evaluate("""() => {                                   // a free, open spot of yesterday's first column
             const col = document.querySelector(".tg-col");
             const top = col.getBoundingClientRect().top;
@@ -725,6 +764,70 @@ def run_offline():
     server.shutdown()
     assert not errors, errors
     print("e2e ok (offline): the agenda shows what was downloaded, everything else is blocked, and it recovers")
+
+
+def run_clients():
+    """Clientes, with the demo data: found by name or phone; her page has the history and what is open,
+    received right there; and booking with a known phone fills her name in."""
+    server = local_server.start(0, demo_data=True)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    errors = []
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        page = browser.new_page(timezone_id=SALON_TIME_ZONE)
+        page.on("pageerror", lambda e: errors.append(str(e)))
+        page.on("console", lambda m: m.type == "error" and errors.append(m.text))
+        page.goto(url_of(server))
+        expect(page.locator("#menu button")).to_have_text(["Agenda", "Clientes", "Serviços", "Profissionais", "Financeiro"])
+        page.click("nav >> text=Clientes")
+        expect(page.locator("h1")).to_have_text("Clientes (36)")
+        expect(page.locator(".pager-page")).to_have_text("1 de 4")
+        # a client who owes something (the demo leaves some past appointments unpaid)
+        owing = page.evaluate("""async () => {
+            for (const c of await fetch("/api/clients").then((r) => r.json())) {
+                const d = await fetch(`/api/clients/${c.phone}`).then((r) => r.json());
+                if (d.open.length > 0) return { ...c, open: d.open.length };
+            }
+        }""")
+        assert owing, "the demo should leave some client with something open"
+        page.fill(".list-search", owing["phone"][-4:])                  # found by the end of her phone
+        page.locator(".list-item", has_text=owing["name"]).click()
+        expect(page.locator("h1")).to_have_text(owing["name"])
+        expect(page.locator(".history tbody tr").first).to_be_visible()
+        expect(page.locator(".card h2", has_text="Em aberto")).to_contain_text(f"({owing['open']})")
+        page.locator(".overdue li").first.locator("text=Marcar como pago").click()     # one of them
+        expect(page.locator(".toast", has_text="Pagamento registrado")).to_be_visible()
+        expect(page.locator(".overdue li")).to_have_count(owing["open"] - 1)
+        if owing["open"] > 2:                                           # "Receber tudo": from two on
+            page.locator("text=Receber tudo").click()
+            expect(page.locator(".toast", has_text="Pagamentos registrados")).to_be_visible()
+        elif owing["open"] == 2:
+            expect(page.locator("text=Receber tudo")).to_have_count(0)
+            page.locator(".overdue li").first.locator("text=Marcar como pago").click()
+        expect(page.locator(".card", has_text="Nada em aberto")).to_be_visible()
+        expect(page.locator(".history .pay.late")).to_have_count(0)
+
+        # a new client by hand, then found by name without the accent
+        page.click("text=‹ Clientes")
+        page.click("main >> text=Nova cliente")
+        page.fill("#k-phone", "(11) 3333-4444")
+        page.fill("#k-name", "Zélia Prado")
+        page.click("dialog[open] >> text=Salvar")
+        expect(page.locator("h1")).to_have_text("Clientes (37)")
+        page.fill(".list-search", "zelia")
+        expect(page.locator(".list-item")).to_contain_text("(11) 3333-4444")
+
+        # booking with her phone: the name comes in by itself
+        page.click("nav >> text=Agenda")
+        page.click("text=Novo agendamento")
+        page.fill("#f-phone", owing["phone"])
+        expect(page.locator("#f-name")).to_have_value(owing["name"])
+        expect(page.locator(".client-note")).to_contain_text("Cliente cadastrada")
+        page.keyboard.press("Escape")
+        browser.close()
+    server.shutdown()
+    assert not errors, errors
+    print("e2e ok (clients): by name or phone, history, receive what is open, new client, booking fills the name")
 
 
 def run_as_employee():
@@ -837,6 +940,7 @@ if __name__ == "__main__":
     run_absences_on_professionals()
     run_long_lists()
     run_finance()
+    run_clients()
     run_offline()
     run_now_marker()
     run_layout()

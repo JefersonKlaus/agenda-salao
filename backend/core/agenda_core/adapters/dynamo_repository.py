@@ -15,7 +15,7 @@ import json
 from datetime import date, timedelta
 from typing import Any, Optional
 
-from ..domain.models import MAX_TIME_OFF_DAYS, MODELS, Access, Appointment, Settings, TimeOff
+from ..domain.models import MAX_TIME_OFF_DAYS, MODELS, Access, Appointment, Client, Settings, TimeOff
 from ..domain.errors import SlotConflict
 from ..domain.scheduling import lock_keys
 
@@ -23,6 +23,11 @@ PREFIXES = {"service": "SERV#", "professional": "PROF#"}
 SETTINGS_KEY, APPOINTMENT_PREFIX, LOCK_PREFIX, OWNER_PREFIX = "CONF", "AGE#", "TRAVA#", "SALAO#"
 TIME_OFF_PREFIX = "OFF#"            # newer than the others, so its name is in English
 ACCESS_PREFIX = "USER#"             # the salon's logins created in the app (id = Cognito's sub)
+CLIENT_PREFIX = "CLI#"              # the salon's clients, by phone
+# Appointments are kept by date (AGE#<date>...). To find one client's, whatever the date, each one also
+# carries CLIENT_KEY = "<owner>#<phone>": the table's index CLIENT_INDEX (infra/dynamodb.tf) answers
+# them in one query, always in step with the appointment itself (payment, professional, cancelling).
+CLIENT_INDEX, CLIENT_KEY, CLIENT_SORT = "by_client", "GSI1PK", "GSI1SK"
 DATA_ATTRIBUTE = "dados"
 
 # English field name (code) -> field name stored in the table. Fields not listed are stored as is.
@@ -159,7 +164,7 @@ class DynamoRepository:
         stored = self.client.get_item(TableName=self.table, Key=key, ConsistentRead=True).get("Item")
         if stored is None or Appointment.from_dict(from_storage(json.loads(stored[DATA_ATTRIBUTE]["S"]))) != old:
             raise SlotConflict("esse agendamento acabou de ser alterado; atualize a agenda")
-        return {"Put": {"TableName": self.table, "Item": self._item(owner, f"{APPOINTMENT_PREFIX}{new.id}", new.to_dict()),
+        return {"Put": {"TableName": self.table, "Item": self._appointment_item(owner, new),
                         "ConditionExpression": "#d = :old", "ExpressionAttributeNames": {"#d": DATA_ATTRIBUTE},
                         "ExpressionAttributeValues": {":old": stored[DATA_ATTRIBUTE]}}}
 
@@ -196,6 +201,39 @@ class DynamoRepository:
     def delete_access(self, owner: str, id: str) -> None:
         self.client.delete_item(TableName=self.table, Key=self._key(owner, f"{ACCESS_PREFIX}{id}"))
 
+    # -------------------------------------------------------------- clients
+    def list_clients(self, owner: str) -> list[Client]:
+        return [Client.from_dict(d) for d in self._query_prefix(owner, CLIENT_PREFIX)]
+
+    def get_client(self, owner: str, phone: str) -> Optional[Client]:
+        data = self._read(owner, f"{CLIENT_PREFIX}{phone}")
+        return Client.from_dict(data) if data else None
+
+    def save_client(self, owner: str, client: Client) -> None:
+        self.client.put_item(TableName=self.table, Item=self._item(owner, f"{CLIENT_PREFIX}{client.phone}", client.to_dict()))
+
+    def client_appointments(self, owner: str, phone: str) -> list[Appointment]:
+        found, start_key = [], None
+        while True:                                 # an index is never read "consistently": a second at most
+            request = {"TableName": self.table, "IndexName": CLIENT_INDEX,
+                       "KeyConditionExpression": f"{CLIENT_KEY} = :c",
+                       "ExpressionAttributeValues": {":c": {"S": f"{owner}#{phone}"}}}
+            if start_key:
+                request["ExclusiveStartKey"] = start_key
+            response = self.client.query(**request)
+            found += [Appointment.from_dict(from_storage(json.loads(i[DATA_ATTRIBUTE]["S"]))) for i in response.get("Items", [])]
+            start_key = response.get("LastEvaluatedKey")
+            if not start_key:
+                return found
+
+    def _appointment_item(self, owner: str, appt: Appointment) -> dict[str, Any]:
+        """The appointment, plus its client's key for the index (appointments with no phone: none)."""
+        item = self._item(owner, f"{APPOINTMENT_PREFIX}{appt.id}", appt.to_dict())
+        if appt.client_phone:
+            item[CLIENT_KEY] = {"S": f"{owner}#{appt.client_phone}"}
+            item[CLIENT_SORT] = {"S": appt.id}
+        return item
+
     def get_appointment(self, owner: str, id: str) -> Optional[Appointment]:
         data = self._read(owner, f"{APPOINTMENT_PREFIX}{id}")
         return Appointment.from_dict(data) if data else None
@@ -205,7 +243,7 @@ class DynamoRepository:
         If any lock already exists, nothing is written and the slot is refused."""
         not_exists = "attribute_not_exists(PK)"
         operations = [{"Put": {"TableName": self.table, "ConditionExpression": not_exists,
-                               "Item": self._item(owner, f"{APPOINTMENT_PREFIX}{appt.id}", appt.to_dict())}}]
+                               "Item": self._appointment_item(owner, appt)}}]
         for key in lock_keys(appt.professional_id, appt.date, appt.start_min, appt.duration_min):
             operations.append({"Put": {"TableName": self.table, "ConditionExpression": not_exists,
                                        "Item": self._item(owner, f"{LOCK_PREFIX}{key}", {"ag": appt.id})}})

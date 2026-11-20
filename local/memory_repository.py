@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Optional
 
-from agenda_core.domain.models import MODELS, Access, Appointment, Settings, TimeOff
+from agenda_core.domain.models import MODELS, Access, Appointment, Client, Settings, TimeOff
 from agenda_core.domain.errors import SlotConflict
 from agenda_core.domain.scheduling import lock_keys
 
@@ -16,7 +16,8 @@ class MemoryRepository:
 
     def _salon(self, owner: str) -> dict[str, Any]:
         return self._data.setdefault(owner, {"service": {}, "professional": {}, "appointments": {},
-                                             "locks": set(), "settings": None, "time_off": {}, "accesses": {}})
+                                             "locks": set(), "settings": None, "time_off": {}, "accesses": {},
+                                             "clients": {}})
 
     def list_items(self, owner: str, kind: str) -> list[Any]:
         return list(self._salon(owner)[kind].values())
@@ -82,6 +83,18 @@ class MemoryRepository:
 
     def get_time_off(self, owner: str, id: str) -> Optional[TimeOff]:
         return self._salon(owner)["time_off"].get(id)
+
+    def list_clients(self, owner: str) -> list[Client]:
+        return list(self._salon(owner)["clients"].values())
+
+    def get_client(self, owner: str, phone: str) -> Optional[Client]:
+        return self._salon(owner)["clients"].get(phone)
+
+    def save_client(self, owner: str, client: Client) -> None:
+        self._salon(owner)["clients"][client.phone] = client
+
+    def client_appointments(self, owner: str, phone: str) -> list[Appointment]:
+        return [a for a in self._salon(owner)["appointments"].values() if a.client_phone == phone]
 
     def list_accesses(self, owner: str) -> list[Access]:
         return list(self._salon(owner)["accesses"].values())

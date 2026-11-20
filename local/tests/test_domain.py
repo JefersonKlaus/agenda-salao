@@ -83,17 +83,18 @@ def test_settings_saved_before_per_day_hours_are_still_read():
     assert old.hours == (Shift(1, "08:00", "12:00"), Shift(2, "08:00", "12:00"))
 
 
-@pytest.mark.parametrize("given, phone", [
-    ("(11) 98888-7777", "11988887777"), ("1133334444", "1133334444"), ("", ""), (None, "")])
+@pytest.mark.parametrize("given, phone", [("(11) 98888-7777", "11988887777"), ("1133334444", "1133334444")])
 def test_client_phone(given, phone):
     assert parse_client({"client_name": "Maria", "client_phone": given}) == ("Maria", phone)
 
 
-def test_client_rejects_short_phone_and_empty_name():
+@pytest.mark.parametrize("payload", [
+    {"client_name": "Maria", "client_phone": "9999"},          # too short
+    {"client_name": "Maria", "client_phone": ""},              # the phone is required: it is her key
+    {"client_name": "Maria"}, {"client_name": " ", "client_phone": "11988887777"}])
+def test_client_rejects_missing_phone_and_empty_name(payload):
     with pytest.raises(ValidationError):
-        parse_client({"client_name": "Maria", "client_phone": "9999"})
-    with pytest.raises(ValidationError):
-        parse_client({"client_name": " ", "client_phone": ""})
+        parse_client(payload)
 
 
 def test_appointment_computes_end():

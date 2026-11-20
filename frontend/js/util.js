@@ -28,6 +28,16 @@ export function notify(text, isError = false) {
 export const formatMoney = (cents) =>
   (cents / 100).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
+/** Only the digits: "(11) 98888-7777" -> "11988887777" (how the API keeps a client's phone, her key). */
+export const phoneDigits = (text) => String(text || "").replace(/\D/g, "");
+
+/** "11988887777" -> "(11) 98888-7777"; "1133334444" -> "(11) 3333-4444". */
+export function formatPhone(digits) {
+  const d = phoneDigits(digits);
+  if (d.length < 10) return d;
+  return `(${d.slice(0, 2)}) ${d.slice(2, d.length - 4)}-${d.slice(-4)}`;
+}
+
 /** "80,50" or "1.200" (Brazilian format) -> integer cents. Returns null if it is not an amount. */
 export function toCents(text) {
   const cleaned = String(text).trim().replace(/\s/g, "").replace("R$", "");

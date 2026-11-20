@@ -36,6 +36,11 @@ def test_demo_data_is_valid_whatever_the_day(offset):
     assert len(accesses) == 12 and {"Ana", "Bia", "Recepção", "João Pedro Alves"} <= set(accesses)
     assert accesses["Recepção"].professional_id is None and accesses["João Pedro Alves"].email == "joao@salao.local"
     assert len({a.email for a in accesses.values()}) == 12                  # no e-mail twice
+    # clients: each with her own phone; every appointment is of one of them
+    clients = {c.phone: c for c in repo.list_clients(OWNER)}
+    assert len(clients) == 36 and all(len(phone) == 11 for phone in clients)
+    assert all(a.client_phone in clients and clients[a.client_phone].name == a.client_name for a in appointments)
+    assert sum(1 for phone in clients if repo.client_appointments(OWNER, phone)) == 32     # 4 never came yet
     assert {p.name: p.login for p in professionals.values()}["Ana"] == "ana@salao.local"
 
 

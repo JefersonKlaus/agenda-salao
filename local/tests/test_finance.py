@@ -13,7 +13,7 @@ EMPLOYEE = dict(groups="[employee]")
 
 def booking(service, professional, start, date="2026-11-16", client="Maria"):
     return {"date": date, "start": start, "service_id": service["id"], "professional_id": professional["id"],
-            "client_name": client}
+            "client_name": client, "client_phone": "11900000001" if client == "Maria" else "11900000002"}
 
 
 def test_the_manager_records_what_already_happened(api):

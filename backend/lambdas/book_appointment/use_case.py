@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from agenda_core.application import check_active, check_slot, service_and_professional
-from agenda_core.domain.models import Appointment, new_id, parse_client, parse_date, parse_time
+from agenda_core.domain.models import Appointment, Client, new_id, parse_client, parse_date, parse_time
 from agenda_core.ports import Dependencies
 
 
@@ -23,4 +23,5 @@ def book_appointment(deps: Dependencies, owner: str, payload: Mapping[str, Any])
                        service.name, service.price_cents, client_name, phone,
                        commission_cents=prof.commission_for(service.id, service.price_cents))
     deps.repo.create_appointment(owner, appt)
+    deps.repo.save_client(owner, Client(phone, client_name))       # registers her, or keeps her name up to date
     return appt

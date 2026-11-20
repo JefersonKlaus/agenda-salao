@@ -2,7 +2,8 @@
 // professional) and registering or removing a professional's absence (sick, travelling...).
 import { api } from "../api.js";
 import { isOnline } from "../offline.js";
-import { addMinutes, durationText, formatMoney, h, notify, openDialog, prettyDate, render, salonNow, whileDisabled } from "../util.js";
+import { addMinutes, durationText, formatMoney, formatPhone, h, notify, openDialog, phoneDigits, prettyDate, render, salonNow,
+  whileDisabled } from "../util.js";
 
 /** Booking to record something that already happened: a past day, or a time today that already went
  *  by (clicked on the agenda). Only then does the dialog offer times that passed. */
@@ -24,10 +25,42 @@ export function openBookingDialog({ date, time = null, professionalId = "", serv
   const professionalSelect = h("select", { id: "f-professional", disabled: true }, h("option", { value: "" }, "Escolha o serviço primeiro"));
   const slotGrid = h("div", { className: "slots" });
   const nameInput = h("input", { id: "f-name", maxLength: 80, autocomplete: "off" });
-  const phoneInput = h("input", { id: "f-phone", type: "tel", maxLength: 20, placeholder: "(11) 90000-0000" });
+  const phoneInput = h("input", { id: "f-phone", type: "tel", maxLength: 20, placeholder: "(11) 90000-0000", autocomplete: "off" });
+  const clientNote = h("p", { className: "muted client-note" });
   const saveButton = h("button", { className: "primary", disabled: true }, "Agendar");
 
-  const updateButton = () => { saveButton.disabled = !(state.time && nameInput.value.trim()); };
+  const phoneOk = () => [10, 11].includes(phoneDigits(phoneInput.value).length);
+  const updateButton = () => { saveButton.disabled = !(state.time && nameInput.value.trim() && phoneOk()); };
+
+  // The phone is the client's key: typed in full, it finds her among the clients (loaded once, when the
+  // dialog opens) and fills her name in, with her visits and what is open; or says she is new (she is
+  // registered when the appointment is saved).
+  const clients = api("GET", "/clients").then((list) => new Map(list.map((c) => [c.phone, c]))).catch(() => new Map());
+  let lookedUp = "", autoName = "";
+  async function findClient() {
+    const digits = phoneDigits(phoneInput.value);
+    updateButton();
+    if (!phoneOk() || digits === lookedUp) return;
+    lookedUp = digits;
+    const client = (await clients).get(digits);
+    if (lookedUp !== digits) return;                      // another phone was typed meanwhile
+    if (!client) {
+      if (nameInput.value === autoName) nameInput.value = autoName = "";
+      clientNote.textContent = "Cliente nova: é cadastrada ao agendar.";
+      return updateButton();
+    }
+    if (!nameInput.value.trim() || nameInput.value === autoName) nameInput.value = autoName = client.name;
+    clientNote.textContent = "Cliente cadastrada";
+    updateButton();
+    try {
+      const { totals } = await api("GET", `/clients/${digits}`);
+      if (lookedUp === digits) {
+        clientNote.textContent = `Cliente cadastrada · ${totals.visits} atendimento(s)`
+          + (totals.open ? ` · ${formatMoney(totals.open)} em aberto` : "");
+      }
+    } catch { /* the note stays short */ }
+  }
+  phoneInput.addEventListener("input", findClient);
 
   function pick(button, time) {
     state.time = time;
@@ -71,8 +104,8 @@ export function openBookingDialog({ date, time = null, professionalId = "", serv
     h("label", { htmlFor: "f-service" }, "Serviço"), serviceSelect,
     h("label", { htmlFor: "f-professional" }, "Profissional"), professionalSelect,
     h("label", {}, "Horário"), slotGrid,
+    h("label", { htmlFor: "f-phone" }, "Telefone da cliente"), phoneInput, clientNote,
     h("label", { htmlFor: "f-name" }, "Nome da cliente"), nameInput,
-    h("label", { htmlFor: "f-phone" }, "Telefone (opcional)"), phoneInput,
     h("div", { className: "actions" }, saveButton,
       h("button", { className: "secondary", onclick: () => dialog.close() }, "Fechar")));
 
@@ -105,7 +138,7 @@ export function openAppointmentDialog(appt, { professionals, away = false, onCha
     h("p", { className: "muted" }, prettyDate(appt.date)),
     away && h("p", { className: "warning" }, `⚠ ${appt.professional_name} está ausente nesse horário: troque a profissional ou cancele.`),
     h("dl", { className: "details" },
-      row("Cliente", appt.client_name), row("Telefone", appt.client_phone), row("Serviço", appt.service_name),
+      row("Cliente", appt.client_name), row("Telefone", formatPhone(appt.client_phone)), row("Serviço", appt.service_name),
       row("Profissional", appt.professional_name), row("Valor", formatMoney(appt.price_cents)),
       row("Pagamento", appt.paid ? "Pago" : "A receber")),
     readOnly ? h("p", { className: "muted" }, offline ? "Sem conexão: dá para consultar, mas não alterar."

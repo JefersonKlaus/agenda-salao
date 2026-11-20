@@ -14,7 +14,7 @@ from datetime import date, timedelta
 from agenda_core.domain.errors import SlotConflict
 from dataclasses import replace
 
-from agenda_core.domain.models import (STEP_MIN, Access, Appointment, Professional, Service, Settings, TimeOff,
+from agenda_core.domain.models import (STEP_MIN, Access, Appointment, Client, Professional, Service, Settings, TimeOff,
                                        format_time, new_id)
 from agenda_core.domain.scheduling import away_intervals, is_past, overlaps, working_interval
 from agenda_core.ports import Dependencies
@@ -93,15 +93,25 @@ def _email(name: str) -> str:
     return first.translate(str.maketrans("áâãàéêíóôõúç", "aaaaeeiooouc")) + "@salao.local"
 
 
-CLIENTS = ["Maria Souza", "Juliana Lima", "Fernanda Alves", "Patrícia Rocha", "Camila Santos", "Aline Costa",
-           "Beatriz Melo", "Larissa Gomes", "Renata Dias", "Vanessa Ribeiro", "Tatiane Moura", "Gabriela Nunes",
-           "Luana Pires", "Rafaela Teixeira", "Carolina Freitas", "Simone Barros", "Débora Cardoso", "Priscila Martins"]
+# The salon's clients, each with her own phone (her key): the appointments below pick from them, so each
+# one has a history (visits, what she paid, what is still open) in Clientes. Four never came yet.
+CLIENT_NAMES = ["Maria Souza", "Juliana Lima", "Fernanda Alves", "Patrícia Rocha", "Camila Santos", "Aline Costa",
+                "Beatriz Melo", "Larissa Gomes", "Renata Dias", "Vanessa Ribeiro", "Tatiane Moura", "Gabriela Nunes",
+                "Luana Pires", "Rafaela Teixeira", "Carolina Freitas", "Simone Barros", "Débora Cardoso",
+                "Priscila Martins", "Bruna Oliveira", "Cláudia Ferreira", "Daniela Batista", "Elaine Correia",
+                "Flávia Mendes", "Giovana Rezende", "Ingrid Campos", "Jéssica Moreira", "Lorena Duarte",
+                "Marina Pacheco", "Nathália Brito", "Olívia Sampaio", "Pâmela Vieira", "Roberta Cunha",
+                "Sílvia Andrade", "Thaís Monteiro", "Úrsula Rangel", "Yasmin Freire"]
+CLIENTS = [(name, f"119{(81234567 + i * 1048573) % 90_000_000 + 10_000_000}") for i, name in enumerate(CLIENT_NAMES)]
+NEW_CLIENTS = 4                     # the last ones: registered, no appointment yet
 
 
 def seed(deps: Dependencies, owner: str, today: date) -> None:
     repo, rng = deps.repo, random.Random(42)
 
     repo.save_settings(owner, Settings.from_input({"hours": SALON_HOURS}))
+    for name, phone in CLIENTS:
+        repo.save_client(owner, Client(phone, name))
     services = {}
     for name, minutes, reais, active in SERVICES:
         service = Service.from_input({"name": name, "duration_min": minutes, "price_cents": reais * 100, "active": active})
@@ -165,8 +175,7 @@ def seed(deps: Dependencies, owner: str, today: date) -> None:
                 if end > hours[1]:
                     break
                 if rng.random() < busy[prof.id] and not overlaps(start, end, away):
-                    client = rng.choice(CLIENTS)
-                    phone = f"119{rng.randrange(10_000_000, 99_999_999)}"
+                    client, phone = rng.choice(CLIENTS[:-NEW_CLIENTS])
                     appt = Appointment(f"{iso}_{start // 60:02d}{start % 60:02d}_{new_id()}", iso, format_time(start),
                                        service.duration_min, prof.id, prof.name, service.id, service.name,
                                        service.price_cents, client, phone,

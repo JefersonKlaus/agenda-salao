@@ -69,14 +69,14 @@ data "aws_iam_policy_document" "lambda_access" {
       "dynamodb:Query",
       "dynamodb:ConditionCheckItem",
     ]
-    resources = [aws_dynamodb_table.agenda.arn]
+    resources = [aws_dynamodb_table.agenda.arn, "${aws_dynamodb_table.agenda.arn}/index/*"]
   }
 }
 
 data "aws_iam_policy_document" "lambda_read_access" {
   statement {
     actions   = ["dynamodb:GetItem", "dynamodb:Query"]
-    resources = [aws_dynamodb_table.agenda.arn]
+    resources = [aws_dynamodb_table.agenda.arn, "${aws_dynamodb_table.agenda.arn}/index/*"]
   }
 }
 

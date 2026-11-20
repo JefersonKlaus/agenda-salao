@@ -43,7 +43,7 @@ def test_full_flow(api):
                          query={"date": "2026-11-17", "service_id": haircut["id"], "professional_id": ana["id"]})
     assert status == 200 and times[0] == "09:00"
     request = {"date": "2026-11-17", "start": "10:00", "service_id": haircut["id"],
-               "professional_id": ana["id"], "client_name": "Maria", "client_phone": ""}
+               "professional_id": ana["id"], "client_name": "Maria", "client_phone": "11988887777"}
     status, appt = call(api, "POST", "/appointments", request)
     assert status == 201 and appt["service_name"] == "Haircut"
     assert call(api, "POST", "/appointments", request)[0] == 400
@@ -116,7 +116,7 @@ def test_professional_work_hours_and_period_through_the_api(api):
     assert call(api, "GET", "/availability", query={"date": "2026-11-17", "service_id": haircut["id"],
                                                     "professional_id": ana["id"]})[1] == ["10:00", "10:15", "10:30", "10:45", "11:00"]
     request = {"date": "2026-11-17", "start": "10:00", "service_id": haircut["id"],
-               "professional_id": ana["id"], "client_name": "Maria"}
+               "professional_id": ana["id"], "client_name": "Maria", "client_phone": "11988887777"}
     assert call(api, "POST", "/appointments", request)[0] == 201
     status, found = call(api, "GET", "/appointments", query={"from": "2026-11-16", "to": "2026-11-22"})
     assert status == 200 and [a["client_name"] for a in found] == ["Maria"]
@@ -128,7 +128,7 @@ def test_time_off_and_change_professional_through_the_api(api):
     haircut, ana = set_up(api)
     _, bia = call(api, "POST", "/professionals", {"name": "Bia", "services": [haircut["id"]]})
     request = {"date": "2026-11-17", "start": "10:00", "service_id": haircut["id"], "professional_id": ana["id"],
-               "client_name": "Maria"}
+               "client_name": "Maria", "client_phone": "11988887777"}
     _, appt = call(api, "POST", "/appointments", request)
     status, body = call(api, "POST", "/time-off", {"professional_id": ana["id"], "first_day": "2026-11-17", "reason": "Doente"})
     assert status == 201 and body["time_off"]["reason"] == "Doente" and [a["id"] for a in body["affected"]] == [appt["id"]]
@@ -174,7 +174,7 @@ def test_employee_sees_the_agenda_but_does_not_book(api):
     status, _ = call(api, "GET", "/appointments", query={"date": "2026-11-17"}, groups="[employee]")
     assert status == 200
     request = {"date": "2026-11-17", "start": "10:00", "service_id": haircut["id"], "professional_id": ana["id"],
-               "client_name": "Maria"}
+               "client_name": "Maria", "client_phone": "11988887777"}
     _, appt = call(api, "POST", "/appointments", request)                        # the manager books it
     query = {"date": "2026-11-17", "service_id": haircut["id"], "professional_id": ana["id"]}
     for method, path, body, params in [("POST", "/appointments", request, None),

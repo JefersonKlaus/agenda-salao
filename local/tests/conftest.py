@@ -72,8 +72,10 @@ class FakeDynamo:
         self.items.pop(self._k(Key), None)
 
     def query(self, TableName, KeyConditionExpression, ExpressionAttributeValues,
-              ConsistentRead=False, ExclusiveStartKey=None):
+              ConsistentRead=False, ExclusiveStartKey=None, IndexName=None):
         values = {k: v["S"] for k, v in ExpressionAttributeValues.items()}
+        if IndexName:
+            return self._query_index(IndexName, KeyConditionExpression, values, ConsistentRead, ExclusiveStartKey)
         if "begins_with(SK, :p)" in KeyConditionExpression:
             matches = lambda sk: sk.startswith(values[":p"])                          # noqa: E731
         else:
@@ -87,6 +89,20 @@ class FakeDynamo:
         response = {"Items": [self.items[k] for k in page]}
         if rest:
             response["LastEvaluatedKey"] = {"PK": {"S": pk}, "SK": {"S": page[-1][1]}}
+        return response
+
+    def _query_index(self, index, condition, values, consistent, start):
+        """The by_client index: items whose GSI1PK is the value, ordered by GSI1SK. Like the real one, an
+        index cannot be read consistently."""
+        assert index == "by_client" and condition == "GSI1PK = :c" and not consistent, (index, condition)
+        found = sorted((item["GSI1SK"]["S"], key) for key, item in self.items.items()
+                       if item.get("GSI1PK", {}).get("S") == values[":c"])
+        if start:
+            found = [f for f in found if f[0] > start["GSI1SK"]["S"]]
+        page, rest = found[:self.page_size], found[self.page_size:]
+        response = {"Items": [self.items[key] for _, key in page]}
+        if rest:
+            response["LastEvaluatedKey"] = {"GSI1SK": {"S": page[-1][0]}}
         return response
 
     def _condition_holds(self, put):

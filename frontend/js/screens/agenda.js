@@ -1,6 +1,6 @@
 // The agenda, Google Calendar style: day, week and month views, one color per professional.
 // The day view has one column per professional who works that day (each her own schedule); the
-// filter shows just one. Hatched gray = the salon is closed (or that professional does not work then);
+// filter shows one, some or all of them. Hatched gray = the salon is closed (or that professional does not work then);
 // hatched yellow, with a note = the salon is open but no professional at all can be booked. What
 // already passed is shaded. Hatched areas never open the booking; past ones only for the manager, who
 // records what happened (employees cannot book, change or cancel what already passed).
@@ -31,7 +31,7 @@ const NOW_TICK_MS = 30_000;                    // the "now" marker moves every 3
 const view = {
   mode: window.matchMedia("(max-width: 640px)").matches ? "day" : "week",
   date: today(),
-  professionalId: "",                          // "" = all professionals
+  chosen: [],                                  // the professionals shown; [] = all of them
 };
 
 export async function mount(container) {
@@ -42,7 +42,7 @@ export async function mount(container) {
     [services, professionals, settings] = await Promise.all([
       api("GET", "/services"), api("GET", "/professionals"), api("GET", "/settings")]);
   } catch (error) { return render(container, h("p", { className: "notice" }, error.message)); }
-  if (!professionals.some((p) => p.id === view.professionalId)) view.professionalId = "";
+  view.chosen = view.chosen.filter((id) => professionals.some((p) => p.id === id));   // deleted since
 
   // The "now" marker (a red line with the time, in today's column) keeps moving while the screen is open;
   // after midnight everything is redrawn so "today" moves to the new day. Stops when the screen is left.
@@ -56,16 +56,27 @@ export async function mount(container) {
   const filterBar = h("div", { className: "cal-filter", role: "group", "aria-label": "Profissionais" });
   const body = h("div", { className: "cal-body" });
   const offlineNote = h("p", { className: "offline-note", hidden: true });   // offline: days never downloaded
-  render(container, toolbar, filterBar, offlineNote, body);
+  const legend = h("p", { className: "pay-legend muted" }, "Pagamento:",
+    h("span", {}, h("span", { className: "pay paid" }, "✓"), " pago"),
+    h("span", {}, h("span", { className: "pay late" }, "R$"), " já aconteceu e não foi pago"),
+    h("span", {}, h("span", { className: "pay due" }, "R$"), " a receber"));
+  render(container, toolbar, filterBar, legend, offlineNote, body);
 
-  const selected = () => professionals.find((p) => p.id === view.professionalId) || null;
-  /** Who the hatching and the items are about: the selected professional, or everybody. */
-  const team = () => (selected() ? [selected()] : professionals);
-  const mine = (item) => !view.professionalId || item.professional_id === view.professionalId;
+  const filtered = () => view.chosen.length > 0;
+  /** Just one professional chosen: her own agenda (week and day show her days, not split by person). */
+  const single = () => (view.chosen.length === 1 ? professionals.find((p) => p.id === view.chosen[0]) : null);
+  /** Who the hatching and the items are about: the chosen professionals, or everybody. */
+  const team = () => (filtered() ? professionals.filter((p) => view.chosen.includes(p.id)) : professionals);
+  const mine = (item) => !filtered() || view.chosen.includes(item.professional_id);
   const nameOf = (id) => professionals.find((p) => p.id === id)?.name || "Profissional";
   const color = (professionalId) => colorClass(professionals, professionalId);
   const showDay = (date) => { view.mode = "day"; view.date = date; load(); };
-  const filterBy = (professionalId) => { view.professionalId = professionalId; drawFilter(); drawBody(); };
+  const filterBy = (ids) => {
+    view.chosen = ids.length === professionals.length ? [] : ids;    // all of them chosen: the same as "Todas"
+    drawFilter();
+    drawBody();
+  };
+  const toggle = (id) => filterBy(view.chosen.includes(id) ? view.chosen.filter((x) => x !== id) : [...view.chosen, id]);
   /** The appointment was made before an absence that now covers it: it needs another professional. */
   const isAway = (a) => awayIntervals(timeOffs, a.professional_id, a.date)
     .some(([s, e]) => toMinutes(a.start) < e && s < toMinutes(a.start) + a.duration_min);
@@ -96,7 +107,7 @@ export async function mount(container) {
     }
   }
 
-  function book(date, time = null, professionalId = view.professionalId) {
+  function book(date, time = null, professionalId = single()?.id || "") {
     openBookingDialog({ date, time, professionalId,                // only the manager books, also in the past
       services, professionals, onBooked: load });
   }
@@ -117,7 +128,7 @@ export async function mount(container) {
     const mine = professionals.filter((p) => mayHandleAbsence(p.id));      // all of them, or just her
     return mine.length > 0 && h("button", { className: "secondary", disabled: !isOnline(), onclick: () => openTimeOffDialog({
       date: view.date < today() ? today() : view.date, professionals: mine, onSaved: load,
-      professionalId: isManager() ? view.professionalId : mine[0].id }) }, "Ausência");
+      professionalId: isManager() ? single()?.id || "" : mine[0].id }) }, "Ausência");
   };
 
   function drawToolbar() {
@@ -138,12 +149,32 @@ export async function mount(container) {
           "Novo agendamento")));
   }
 
-  /** "Todas" + one button per professional, in her color: the filter and the color legend at once. */
+  /** Paid, or not yet: "late" when it already happened (someone should charge it), "due" when ahead. */
+  function payment(a) {
+    if (a.paid) return { kind: "paid", label: "Pago" };
+    const now = salonNow();
+    const happened = a.date < now.date || (a.date === now.date && toMinutes(a.start) <= now.minutes);
+    return happened ? { kind: "late", label: "Já aconteceu e não foi pago" } : { kind: "due", label: "A receber" };
+  }
+  const payMark = (a) => {
+    const { kind, label } = payment(a);
+    return h("span", { className: `pay ${kind}`, title: label, "aria-label": label }, kind === "paid" ? "✓" : "R$");
+  };
+
+  /** "Todas" + one button per professional, in her color: the filter and the color legend at once.
+   *  Each name turns on and off, so the agenda shows one, some or all of them. */
   function drawFilter() {
-    const pill = (professionalId, label) => h("button", { className: "pill",
-      "aria-pressed": String(professionalId === view.professionalId), onclick: () => filterBy(professionalId) },
-    professionalId && h("span", { className: `dot ${color(professionalId)}`, "aria-hidden": "true" }), label);
-    render(filterBar, professionals.length > 0 && [pill("", "Todas"), professionals.map((p) => pill(p.id, p.name))]);
+    const all = h("button", { className: "pill", "aria-pressed": String(!filtered()), onclick: () => filterBy([]),
+      title: "Ver a agenda de todas" }, "Todas");
+    const pill = (p) => {
+      const on = view.chosen.includes(p.id);
+      return h("button", { className: "pill", "aria-pressed": String(on), onclick: () => toggle(p.id),
+        title: on ? `Tirar ${p.name} da agenda` : `Mostrar ${p.name}` },
+      h("span", { className: `dot ${color(p.id)}`, "aria-hidden": "true" }), p.name);
+    };
+    render(filterBar, professionals.length > 0 && [all, professionals.map(pill),
+      filtered() && h("span", { className: "muted filter-count" },
+        `${view.chosen.length} de ${professionals.length}`)]);
   }
 
   function drawBody() {
@@ -153,17 +184,19 @@ export async function mount(container) {
     if (view.mode === "month") return render(body, monthGrid(days));
     const columns = columnsFor(days);
     if (columns.length === 0) {                // day view: nobody works that day (closed, or nobody to attend)
-      const absences = timeOffs.filter((t) => t.first_day <= days[0] && days[0] <= t.last_day);
+      const absences = timeOffs.filter((t) => t.first_day <= days[0] && days[0] <= t.last_day && mine(t));
       const salonOpens = workingInterval(settings, null, days[0]) !== null;
-      return render(body, h("div", { className: "card empty-day" + (salonOpens ? " gap-day" : "") },
-        h("p", {}, salonOpens ? "O salão abre neste dia, mas nenhuma profissional atende: não dá para agendar."
-          : "O salão não abre neste dia."),
+      const nobody = openIntervals(settings, professionals, days[0], timeOffs).length === 0;
+      return render(body, h("div", { className: "card empty-day" + (salonOpens && nobody ? " gap-day" : "") },
+        h("p", {}, !salonOpens ? "O salão não abre neste dia."
+          : nobody ? "O salão abre neste dia, mas nenhuma profissional atende: não dá para agendar."
+            : "Nenhuma das profissionais escolhidas atende neste dia."),
         absences.map((t) => absenceChip(t, `${nameOf(t.professional_id)} ausente`))));
     }
     // Day view: who is away all day (and has nothing booked) has no column; say so above the grid.
     const shown = new Set(columns.map((c) => c.professionalId));
-    const hidden = view.mode === "day" && !selected()
-      && timeOffs.filter((t) => t.first_day <= days[0] && days[0] <= t.last_day && !shown.has(t.professional_id));
+    const hidden = view.mode === "day" && !single()
+      && timeOffs.filter((t) => t.first_day <= days[0] && days[0] <= t.last_day && mine(t) && !shown.has(t.professional_id));
     render(body, hidden && hidden.length > 0 && h("div", { className: "away-line" },
       h("span", { className: "muted" }, "Ausentes:"), hidden.map((t) => absenceChip(t, nameOf(t.professional_id)))),
     timeGrid(columns));
@@ -171,17 +204,18 @@ export async function mount(container) {
 
   // ------------------------------------------------------------------ day and week
   /** What each column of the time grid shows. Week: one column per day. Day: one per professional who
-   *  can be booked that day or has appointments in it; a single one when filtering by a professional. */
+   *  can be booked that day or has appointments in it, among the chosen ones; a single one when just one
+   *  professional is chosen. */
   function columnsFor(days) {
-    const dayColumn = (date) => ({ date, professionalId: view.professionalId, header: dayHeader(date),
+    const dayColumn = (date) => ({ date, professionalId: single()?.id || "", header: dayHeader(date),
       appts: appointments.filter((a) => a.date === date && mine(a)),
       absences: timeOffs.filter((t) => t.first_day <= date && date <= t.last_day && mine(t)),
       open: openIntervals(settings, team(), date, timeOffs) });
-    if (view.mode === "week" || selected() || professionals.length === 0) return days.map(dayColumn);
+    if (view.mode === "week" || single() || professionals.length === 0) return days.map(dayColumn);
 
     const date = days[0];
-    const ofDay = appointments.filter((a) => a.date === date);
-    const columns = professionals.map((p) => ({ date, professionalId: p.id, header: personHeader(p.id, p.name),
+    const ofDay = appointments.filter((a) => a.date === date && mine(a));
+    const columns = team().map((p) => ({ date, professionalId: p.id, header: personHeader(p.id, p.name),
       appts: ofDay.filter((a) => a.professional_id === p.id),
       absences: timeOffs.filter((t) => t.professional_id === p.id && t.first_day <= date && date <= t.last_day),
       open: availableIntervals(settings, p, date, timeOffs) }))
@@ -205,7 +239,7 @@ export async function mount(container) {
   function personHeader(professionalId, name) {
     const known = professionals.some((p) => p.id === professionalId);
     return h("button", { className: "tg-person", title: known ? `Ver só a agenda de ${name}` : name,
-      onclick: () => known && filterBy(professionalId) },
+      onclick: () => known && filterBy([professionalId]) },
     h("span", { className: `dot ${color(professionalId)}`, "aria-hidden": "true" }), h("span", {}, name));
   }
 
@@ -220,7 +254,7 @@ export async function mount(container) {
     const px = (minutes) => `${(minutes * HOUR_PX) / 60}px`;          // a duration on screen
     const y = (time) => px(time - gridStart);                            // a time of day on screen
     const height = px(gridEnd - gridStart);
-    const perPerson = view.mode === "day" && !selected() && professionals.length > 0;
+    const perPerson = view.mode === "day" && !single() && professionals.length > 0;
 
     const gutter = h("div", { className: "tg-gutter" });
     gutter.style.height = height;
@@ -291,8 +325,10 @@ export async function mount(container) {
     const appointmentBlock = (a) => {
       const away = isAway(a);
       return h("button", { className: `tg-event ${color(a.professional_id)}${a.duration_min <= 30 ? " short" : ""}${away ? " conflict" : ""}`,
-        title: `${away ? "⚠ Profissional ausente · " : ""}${a.start} ${a.client_name} · ${a.service_name} · ${a.professional_name}`,
+        title: `${away ? "⚠ Profissional ausente · " : ""}${a.start} ${a.client_name} · ${a.service_name} · ${a.professional_name}`
+          + ` · ${payment(a).label}`,
         onclick: () => openAppointment(a) },
+      payMark(a),
       h("strong", {}, `${away ? "⚠ " : ""}${a.start} ${a.client_name}`), h("span", {}, `${a.service_name} · ${a.professional_name}`));
     };
     const absenceBlock = (t, inHerColumn) => h("button", { className: "tg-away", title: absenceLabel(t) || "Ausente",
@@ -340,8 +376,8 @@ export async function mount(container) {
         ...absences.map((t) => h("button", { className: "mv-chip mv-away", title: absenceLabel(t) || "Ausente", onclick: () => openAbsence(t) },
           h("span", { className: "wide-only" }, `${nameOf(t.professional_id)} `), "ausente")),
         ...appts.map((a) => h("button", { className: `mv-chip ${color(a.professional_id)}${isAway(a) ? " conflict" : ""}`,
-          title: `${a.start} ${a.client_name} · ${a.service_name} · ${a.professional_name}`,
-          onclick: () => openAppointment(a) }, isAway(a) && "⚠ ", a.start, h("span", { className: "wide-only" }, ` ${a.client_name}`))),
+          title: `${a.start} ${a.client_name} · ${a.service_name} · ${a.professional_name} · ${payment(a).label}`,
+          onclick: () => openAppointment(a) }, payMark(a), isAway(a) && "⚠ ", a.start, h("span", { className: "wide-only" }, ` ${a.client_name}`))),
       ];
       // a whole day the salon opens with nobody to attend is yellow, not gray like a closed day
       const salonOpens = workingInterval(settings, null, date) !== null;

@@ -1,0 +1,4 @@
+{
+  "route": "POST /clients",
+  "database": "write"
+}

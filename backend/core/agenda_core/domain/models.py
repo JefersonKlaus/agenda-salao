@@ -29,8 +29,9 @@ FIELD_LABELS = {
     "name": "nome", "duration_min": "duracao_min", "price_cents": "preco_centavos",
     "services": "servicos", "open_days": "dias_abertos",
     "client_name": "cliente_nome", "client_phone": "cliente_telefone", "reason": "motivo",
-    "email": "e-mail",
+    "email": "e-mail", "phone": "telefone",
 }
+PHONE_RE = re.compile(r"^\d{10,11}$")       # a client's key: area code + number, digits only
 _EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
@@ -369,13 +370,35 @@ class Access:
         return cls(**{field: d[field] for field in cls.__dataclass_fields__ if field in d})
 
 
+def _phone(payload: Mapping[str, Any], field: str) -> str:
+    """"(11) 98888-7777" -> "11988887777": area code + number, digits only. Required: it is the client's key."""
+    phone = re.sub(r"\D", "", _text(payload, field, 20))
+    if not PHONE_RE.match(phone):
+        raise ValidationError(f"{FIELD_LABELS[field]}: use DDD + número")
+    return phone
+
+
 def parse_client(payload: Mapping[str, Any]) -> tuple[str, str]:
-    """Name and phone (digits only, with area code). The phone is optional."""
-    name = _text(payload, "client_name")
-    phone = re.sub(r"\D", "", _text(payload, "client_phone", 20, required=False))
-    if phone and len(phone) not in (10, 11):
-        raise ValidationError("cliente_telefone: use DDD + número")
-    return name, phone
+    """Name and phone of the client of an appointment. The phone is required: it registers her."""
+    return _text(payload, "client_name"), _phone(payload, "client_phone")
+
+
+@dataclass(frozen=True)
+class Client:
+    """A client of the salon. Her phone is her key: booking with it registers her (or finds her)."""
+    phone: str
+    name: str
+
+    @classmethod
+    def from_input(cls, payload: Mapping[str, Any]) -> "Client":
+        return cls(_phone(payload, "phone"), _text(payload, "name"))
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "Client":
+        return cls(d["phone"], d["name"])
 
 
 MODELS = {"service": Service, "professional": Professional}

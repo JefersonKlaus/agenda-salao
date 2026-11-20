@@ -7,11 +7,13 @@ import { mount as agenda } from "./screens/agenda.js";
 import { mount as settings } from "./screens/settings.js";
 import { mount as finance } from "./screens/finance.js";
 import { mount as accesses } from "./screens/access.js";
+import { mount as clients } from "./screens/clients.js";
 import { professionals, services } from "./screens/catalog.js";
 
 const content = document.getElementById("content");
 // [name, mount, in the "Configurações" group at the bottom of the sidebar]
-const SCREENS = [["Agenda", agenda], ["Serviços", services], ["Profissionais", professionals], ["Financeiro", finance],
+const SCREENS = [["Agenda", agenda], ["Clientes", clients], ["Serviços", services], ["Profissionais", professionals],
+  ["Financeiro", finance],
   ["Funcionamento", settings, true], ["Acessos", accesses, true]];
 const EMPLOYEE_SCREENS = new Set(["Agenda", "Serviços"]);        // the rest is the manager's (the API agrees)
 
