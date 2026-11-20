@@ -4,7 +4,7 @@ import pytest
 
 from agenda_core.application import LIMITS
 from agenda_core.domain.errors import NotFound, SlotConflict, ValidationError
-from conftest import OTHER, OWNER, booking
+from conftest import OTHER, OWNER, booking, salon_hours
 
 
 def test_create_list_and_sort(agenda):
@@ -86,8 +86,6 @@ def test_two_professionals_can_work_at_the_same_time(agenda, salon):
 
 # The expected fragments are from the (Portuguese) error messages shown to the user.
 @pytest.mark.parametrize("extra, fragment", [
-    ({"date": "2026-11-16", "start": "09:30"}, "já passou"),            # today, before now (10:00)
-    ({"date": "2026-11-15"}, "já passou"),
     ({"date": "2026-11-22"}, "fora do expediente"),                     # Sunday
     ({"start": "08:45"}, "fora do expediente"),
     ({"start": "18:30"}, "fora do expediente"),                         # 60 min goes past 19:00
@@ -101,6 +99,14 @@ def test_refused_bookings(agenda, salon, extra, fragment):
     haircut, _, ana = salon
     with pytest.raises(ValidationError, match=fragment):
         agenda.book(OWNER, booking(haircut, ana, **extra))
+
+
+@pytest.mark.parametrize("extra", [{"date": "2026-11-16", "start": "09:30"},    # today, before now (10:00)
+                                   {"date": "2026-11-14"}])                  # last Saturday
+def test_booking_what_already_happened(agenda, salon, extra):
+    """Only the manager books (the API refuses employees), and she may record what already happened."""
+    haircut, _, ana = salon
+    assert agenda.book(OWNER, booking(haircut, ana, **extra)).professional_id == ana.id
 
 
 def test_professional_who_does_not_perform_the_service(agenda, salon):
@@ -131,11 +137,24 @@ def test_availability_reflects_the_appointments(agenda, salon):
 
 def test_settings_change_the_availability(agenda, salon):
     haircut, _, ana = salon
-    assert agenda.settings(OWNER).opens == "09:00"
-    agenda.save_settings(OWNER, {"open_days": [1], "opens": "13:00", "closes": "15:00"})
+    assert agenda.settings(OWNER).shift_on(1).start == "09:00"
+    agenda.save_settings(OWNER, salon_hours([1], "13:00", "15:00"))
     assert agenda.availability(OWNER, "2026-11-17", haircut.id, ana.id) == ["13:00", "13:15", "13:30", "13:45", "14:00"]
     assert agenda.availability(OWNER, "2026-11-18", haircut.id, ana.id) == []
-    assert agenda.settings(OTHER).opens == "09:00"                      # the other salon did not change
+    assert agenda.settings(OTHER).shift_on(1).start == "09:00"          # the other salon did not change
+
+
+def test_each_day_its_own_salon_hours(agenda, salon):
+    haircut, _, ana = salon
+    agenda.save_settings(OWNER, {"hours": [{"day": 1, "start": "09:00", "end": "11:00"},      # Tuesday
+                                           {"day": 2, "start": "14:00", "end": "16:00"}]})    # Wednesday
+    assert agenda.availability(OWNER, "2026-11-17", haircut.id, ana.id) == ["09:00", "09:15", "09:30", "09:45", "10:00"]
+    assert agenda.availability(OWNER, "2026-11-18", haircut.id, ana.id)[0] == "14:00"
+    with pytest.raises(ValidationError, match="fora do expediente do salão"):
+        agenda.book(OWNER, booking(haircut, ana, "14:00", "2026-11-17"))       # Wednesday's hours, on Tuesday
+    with pytest.raises(ValidationError, match=r"Terça: fora do horário do salão \(09:00–11:00\)"):
+        agenda.update(OWNER, "professional", ana.id, {"name": "Ana", "services": [haircut.id], "work_hours": [
+            {"day": 1, "start": "14:00", "end": "16:00"}]})
 
 
 def test_cancelling_frees_the_slot(agenda, salon):
@@ -224,7 +243,7 @@ def test_professional_hours_must_fit_inside_the_salon_hours(agenda, salon, shift
 def test_narrowing_the_salon_hours_later_cuts_her_hours(agenda, salon):
     haircut, _, ana = salon
     agenda.update(OWNER, "professional", ana.id, {"name": "Ana", "services": [haircut.id], "work_hours": PART_TIME})
-    agenda.save_settings(OWNER, {"open_days": [1], "opens": "12:00", "closes": "19:00"})
+    agenda.save_settings(OWNER, salon_hours([1], "12:00", "19:00"))
     assert agenda.availability(OWNER, "2026-11-17", haircut.id, ana.id) == ["12:00", "12:15", "12:30", "12:45", "13:00"]
     with pytest.raises(ValidationError, match="fora do expediente do salão"):
         agenda.book(OWNER, booking(haircut, ana, "10:00"))
@@ -253,7 +272,7 @@ def test_removing_a_service_keeps_the_professional_work_hours(agenda, salon):
 
 def test_schedule_between_sorts_and_isolates_salons(agenda, salon):
     haircut, nails, ana = salon
-    agenda.save_settings(OWNER, {"open_days": [0, 1, 2, 3, 4, 5, 6], "opens": "09:00", "closes": "19:00"})
+    agenda.save_settings(OWNER, salon_hours(range(7), "09:00", "19:00"))
     for date, start in (("2026-11-22", "09:00"), ("2026-11-17", "15:00"), ("2026-11-17", "10:00"), ("2026-11-23", "10:00")):
         agenda.book(OWNER, booking(nails, ana, start, date))
     week = agenda.schedule_between(OWNER, "2026-11-16", "2026-11-22")

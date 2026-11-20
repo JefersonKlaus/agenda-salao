@@ -6,16 +6,17 @@ import pytest
 from agenda_core.adapters.api_gateway import MAX_BODY
 from agenda_core.ports import Dependencies
 from api_gateway import ROUTES, dispatch
+from memory_identity import MemoryIdentity
 from memory_repository import MemoryRepository
-from conftest import NOW, ROOT
+from conftest import NOW, ROOT, salon_hours
 
 
-def call(deps, method, path, body=None, query=None, owner="owner-a", base64_=False, groups=None):
+def call(deps, method, path, body=None, query=None, owner="owner-a", base64_=False, groups=None, claims=None):
     event = {"rawPath": path, "requestContext": {"http": {"method": method}},
              "queryStringParameters": query}
     if owner:
-        claims = {"sub": owner} if groups is None else {"sub": owner, "cognito:groups": groups}
-        event["requestContext"]["authorizer"] = {"jwt": {"claims": claims}}
+        token = {"sub": owner, **({} if groups is None else {"cognito:groups": groups}), **(claims or {})}
+        event["requestContext"]["authorizer"] = {"jwt": {"claims": token}}
     if body is not None:
         text = body if isinstance(body, str) else json.dumps(body)
         event["body"] = base64.b64encode(text.encode()).decode() if base64_ else text
@@ -26,7 +27,7 @@ def call(deps, method, path, body=None, query=None, owner="owner-a", base64_=Fal
 
 @pytest.fixture
 def api():
-    return Dependencies(MemoryRepository(), lambda: NOW)
+    return Dependencies(MemoryRepository(), lambda: NOW, MemoryIdentity())
 
 
 def set_up(api):
@@ -49,8 +50,8 @@ def test_full_flow(api):
     assert len(call(api, "GET", "/appointments", query={"date": "2026-11-17"})[1]) == 1
     assert call(api, "DELETE", f"/appointments/{appt['id']}") == (204, None)
     assert call(api, "DELETE", f"/appointments/{appt['id']}")[0] == 404
-    assert call(api, "PUT", "/settings", {"open_days": [1], "opens": "08:00", "closes": "12:00"})[0] == 200
-    assert call(api, "GET", "/settings")[1]["opens"] == "08:00"
+    assert call(api, "PUT", "/settings", salon_hours([1], "08:00", "12:00"))[0] == 200
+    assert call(api, "GET", "/settings")[1] == {"hours": [{"day": 1, "start": "08:00", "end": "12:00"}]}
 
 
 def test_no_login_is_401_and_does_not_touch_the_database(api):
@@ -160,18 +161,31 @@ def test_employee_cannot_change_catalog_or_settings(api, groups):
             ("POST", "/professionals", {"name": "Bia", "services": []}),
             ("PUT", f"/professionals/{ana['id']}", {"name": "X", "services": []}),
             ("DELETE", f"/professionals/{ana['id']}", None),
-            ("PUT", "/settings", {"open_days": [0], "opens": "09:00", "closes": "18:00"})]:
+            ("PUT", "/settings", salon_hours([0], "09:00", "18:00"))]:
         assert call(api, method, path, body, **as_employee)[0] == 403, (method, path)
     assert call(api, "GET", "/services")[1][0]["name"] == "Haircut"          # nothing changed
     assert [p["name"] for p in call(api, "GET", "/professionals")[1]] == ["Ana"]
 
 
-def test_employee_reads_and_runs_the_agenda(api):
+def test_employee_sees_the_agenda_but_does_not_book(api):
     haircut, ana = set_up(api)
     for path in ("/services", "/professionals", "/settings"):
         assert call(api, "GET", path, groups="[employee]")[0] == 200
     status, _ = call(api, "GET", "/appointments", query={"date": "2026-11-17"}, groups="[employee]")
     assert status == 200
+    request = {"date": "2026-11-17", "start": "10:00", "service_id": haircut["id"], "professional_id": ana["id"],
+               "client_name": "Maria"}
+    _, appt = call(api, "POST", "/appointments", request)                        # the manager books it
+    query = {"date": "2026-11-17", "service_id": haircut["id"], "professional_id": ana["id"]}
+    for method, path, body, params in [("POST", "/appointments", request, None),
+                                       ("GET", "/availability", None, query),
+                                       ("DELETE", f"/appointments/{appt['id']}", None, None),
+                                       ("PUT", f"/appointments/{appt['id']}/professional", {"professional_id": ana["id"]}, None),
+                                       ("PUT", f"/appointments/{appt['id']}/payment", {"paid": True}, None),
+                                       ("GET", "/finance", None, {"month": "2026-11"}),
+                                       ("GET", "/access", None, None),
+                                       ("POST", "/access", {"email": "x@y.com", "name": "X"}, None)]:
+        assert call(api, method, path, body, query=params, groups="[employee]")[0] == 403, (method, path)
 
 
 @pytest.mark.parametrize("groups", [None, "[manager]", "[manager employee]", ["manager"]])
@@ -200,3 +214,31 @@ def test_read_only_lambdas_never_write(api):
     source = "\n".join((ROOT / "backend" / "lambdas" / n / "use_case.py").read_text(encoding="utf-8") for n in reads)
     for write in ("save", "delete", "create_appointment", "cancel_appointment", "change_appointment"):
         assert f"repo.{write}" not in source, write
+
+
+def test_time_off_kind_and_a_year_of_absences(api):
+    _, ana = set_up(api)
+    status, body = call(api, "POST", "/time-off", {"professional_id": ana["id"], "first_day": "2027-07-01",
+                                                   "last_day": "2027-07-20", "kind": "vacation"})
+    assert status == 201 and body["time_off"]["kind"] == "vacation"
+    status, found = call(api, "GET", "/time-off", query={"from": "2026-11-17", "to": "2027-11-17"})   # the next year
+    assert status == 200 and [t["kind"] for t in found] == ["vacation"]
+    assert call(api, "GET", "/time-off", query={"from": "2026-11-17", "to": "2027-11-18"})[0] == 400
+    assert call(api, "GET", "/appointments", query={"from": "2026-11-17", "to": "2027-11-17"})[0] == 400   # still 62
+
+
+def test_every_call_of_the_frontend_has_a_lambda_and_every_lambda_is_used():
+    """The contract between the two sides: each api("METHOD", "/path") in frontend/js matches a route
+    in some lambda.json (what Terraform deploys), and no Lambda is left that nobody calls."""
+    import re
+    routes = {json.loads((ROOT / "backend" / "lambdas" / name / "lambda.json").read_text())["route"]
+              for _, _, name, _ in ROUTES}
+    calls = set()
+    for file in (ROOT / "frontend" / "js").rglob("*.js"):
+        for method, path in re.findall(r'api\("([A-Z]+)", [`"]([^`"]+)[`"]', file.read_text(encoding="utf-8")):
+            # catalog.js serves both lists with `/${route}`; any other ${...} is an id
+            for kind in (("services", "professionals") if "${route}" in path else (None,)):
+                concrete = path.replace("${route}", kind or "")
+                calls.add(f"{method} {re.sub(r'\$\{[^}]+\}', '{id}', concrete)}")
+    assert calls - routes == set(), "the frontend calls routes no Lambda answers"
+    assert routes - calls == set(), "Lambdas nobody calls"

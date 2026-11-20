@@ -3,7 +3,7 @@
 frontend checks). Everything is installed inside .venv/, nothing globally.
 
     python dev.py setup     create .venv with the test tools and download Chromium for the browser test
-    python dev.py serve     the site + in-memory API at http://127.0.0.1:8765, no login (manager|employee, --port)
+    python dev.py serve     the site + in-memory API at http://127.0.0.1:8765, no login, with demo data (manager|employee, --port, --empty, --connection off)
     python dev.py test      backend tests, calendar unit tests and the JS syntax check (quick)
     python dev.py e2e       the browser test (a real Chromium)
     python dev.py all       test + e2e: what CI runs, except Terraform
@@ -55,7 +55,8 @@ def setup(args: argparse.Namespace) -> int:
 
 def serve(args: argparse.Namespace) -> int:
     try:
-        return run(python(), "local/server.py", args.role, "--port", str(args.port))
+        return run(python(), "local/server.py", args.role, "--port", str(args.port), "--connection", args.connection,
+                   *(["--empty"] if args.empty else []), *(["--professional", args.professional] if args.professional else []))
     except KeyboardInterrupt:
         return 0
 
@@ -107,6 +108,10 @@ def main() -> int:
     serve_parser.add_argument("role", nargs="?", choices=("manager", "employee"), default="manager",
                               help="the Cognito group to simulate (default: manager)")
     serve_parser.add_argument("--port", type=int, default=8765)
+    serve_parser.add_argument("--empty", action="store_true", help="start with no data (default: demo data)")
+    serve_parser.add_argument("--professional", help="employee only: which professional she is (e.g. Ana)")
+    serve_parser.add_argument("--connection", choices=("on", "off"), default="on",
+                              help="off = simulate no internet: the site loads, the API never answers")
     commands.add_parser("test", help="backend tests, calendar unit tests and JS syntax")
     commands.add_parser("e2e", help="the browser test")
     commands.add_parser("all", help="test + e2e")

@@ -4,7 +4,7 @@ from __future__ import annotations
 import threading
 from typing import Any, Optional
 
-from agenda_core.domain.models import MODELS, Appointment, Settings, TimeOff
+from agenda_core.domain.models import MODELS, Access, Appointment, Settings, TimeOff
 from agenda_core.domain.errors import SlotConflict
 from agenda_core.domain.scheduling import lock_keys
 
@@ -16,7 +16,7 @@ class MemoryRepository:
 
     def _salon(self, owner: str) -> dict[str, Any]:
         return self._data.setdefault(owner, {"service": {}, "professional": {}, "appointments": {},
-                                             "locks": set(), "settings": None, "time_off": {}})
+                                             "locks": set(), "settings": None, "time_off": {}, "accesses": {}})
 
     def list_items(self, owner: str, kind: str) -> list[Any]:
         return list(self._salon(owner)[kind].values())
@@ -67,11 +67,30 @@ class MemoryRepository:
             salon["locks"].difference_update(old_keys)
             salon["locks"].update(new_keys)
 
+    def update_appointment(self, owner: str, old: Appointment, new: Appointment) -> None:
+        with self._lock:
+            salon = self._salon(owner)
+            if salon["appointments"].get(old.id) != old:
+                raise SlotConflict("esse agendamento acabou de ser alterado; atualize a agenda")
+            salon["appointments"][new.id] = new
+
     def time_off_between(self, owner: str, first: str, last: str) -> list[TimeOff]:
         return [t for t in self._salon(owner)["time_off"].values() if t.first_day <= last and t.last_day >= first]
 
     def save_time_off(self, owner: str, time_off: TimeOff) -> None:
         self._salon(owner)["time_off"][time_off.id] = time_off
+
+    def get_time_off(self, owner: str, id: str) -> Optional[TimeOff]:
+        return self._salon(owner)["time_off"].get(id)
+
+    def list_accesses(self, owner: str) -> list[Access]:
+        return list(self._salon(owner)["accesses"].values())
+
+    def save_access(self, owner: str, access: Access) -> None:
+        self._salon(owner)["accesses"][access.id] = access
+
+    def delete_access(self, owner: str, id: str) -> None:
+        self._salon(owner)["accesses"].pop(id, None)
 
     def delete_time_off(self, owner: str, id: str) -> bool:
         return self._salon(owner)["time_off"].pop(id, None) is not None

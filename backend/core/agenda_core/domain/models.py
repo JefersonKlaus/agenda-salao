@@ -21,6 +21,7 @@ ITEM_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 APPOINTMENT_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_\d{4}_[0-9a-f]{8}$")
 TIME_OFF_ID_RE = re.compile(r"^\d{4}-\d{2}-\d{2}_[0-9a-f]{8}$")
 MAX_TIME_OFF_DAYS = 180             # longest absence (a long leave); also bounds the calendar's lookups
+TIME_OFF_KINDS = ("vacation", "sick", "travel", "day_off", "other")   # the screen shows them in Portuguese
 DAY_NAMES = ("Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo")   # shown to the user
 
 # How each API field is named in the (Portuguese) error messages shown to the user.
@@ -28,7 +29,9 @@ FIELD_LABELS = {
     "name": "nome", "duration_min": "duracao_min", "price_cents": "preco_centavos",
     "services": "servicos", "open_days": "dias_abertos",
     "client_name": "cliente_nome", "client_phone": "cliente_telefone", "reason": "motivo",
+    "email": "e-mail",
 }
+_EMAIL_RE = re.compile(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
 
 
 def new_id() -> str:
@@ -105,7 +108,7 @@ class Service:
 
 @dataclass(frozen=True)
 class Shift:
-    """The hours a professional works on one weekday (0 = Monday ... 6 = Sunday)."""
+    """Opening hours on one weekday (0 = Monday ... 6 = Sunday): the salon's, or a professional's."""
     day: int
     start: str
     end: str
@@ -114,7 +117,7 @@ class Shift:
         return asdict(self)
 
 
-def _parse_work_hours(value: Any) -> Optional[tuple[Shift, ...]]:
+def _parse_work_hours(value: Any, label: str = "horário de trabalho") -> Optional[tuple[Shift, ...]]:
     """None = follows the salon's hours. A list = only those days, at those times
     (an empty list means she does not work on any day)."""
     if value is None:
@@ -122,7 +125,7 @@ def _parse_work_hours(value: Any) -> Optional[tuple[Shift, ...]]:
     if not isinstance(value, list) or len(value) > 7 or not all(
             isinstance(s, dict) and isinstance(s.get("day"), int) and not isinstance(s.get("day"), bool)
             and 0 <= s["day"] <= 6 for s in value):
-        raise ValidationError("horário de trabalho: envie uma lista de dias (0 a 6) com entrada e saída")
+        raise ValidationError(f"{label}: envie uma lista de dias (0 a 6) com entrada e saída")
     shifts = []
     for s in value:
         start, end = parse_time(s.get("start")), parse_time(s.get("end"))
@@ -132,8 +135,45 @@ def _parse_work_hours(value: Any) -> Optional[tuple[Shift, ...]]:
             raise ValidationError(f"{DAY_NAMES[s['day']]}: a saída precisa ser depois da entrada")
         shifts.append(Shift(s["day"], format_time(start), format_time(end)))
     if len({s.day for s in shifts}) != len(shifts):
-        raise ValidationError("horário de trabalho: cada dia só pode aparecer uma vez")
+        raise ValidationError(f"{label}: cada dia só pode aparecer uma vez")
     return tuple(sorted(shifts, key=lambda s: s.day))
+
+
+COMMISSION_KINDS = ("percent", "fixed")       # % of the service's price, or a fixed amount (cents) per service
+
+
+@dataclass(frozen=True)
+class Commission:
+    """What a professional earns each time she performs a service: `value` % of its price
+    ("percent", 0 to 100), or `value` cents ("fixed")."""
+    service_id: str
+    kind: str
+    value: int
+
+    def of(self, price_cents: int) -> int:
+        return round(price_cents * self.value / 100) if self.kind == "percent" else self.value
+
+
+def _parse_commissions(value: Any, services: tuple[str, ...]) -> tuple[Commission, ...]:
+    """{service_id: {"kind": "percent" | "fixed", "value": int}}, only for services she performs."""
+    if value is None:
+        return ()
+    if not isinstance(value, dict):
+        raise ValidationError("comissão: envie um objeto por serviço")
+    found = []
+    for service_id, rule in value.items():
+        if service_id not in services:
+            raise ValidationError("comissão: só para os serviços que ela faz")
+        kind = rule.get("kind") if isinstance(rule, dict) else None
+        number = rule.get("value") if isinstance(rule, dict) else None
+        if kind not in COMMISSION_KINDS or isinstance(number, bool) or not isinstance(number, int):
+            raise ValidationError("comissão: informe percentual ou valor fixo")
+        if kind == "percent" and not 0 <= number <= 100:
+            raise ValidationError("comissão: o percentual vai de 0 a 100")
+        if kind == "fixed" and not 0 <= number <= MAX_PRICE_CENTS:
+            raise ValidationError("comissão: valor fixo inválido")
+        found.append(Commission(service_id, kind, number))
+    return tuple(sorted(found, key=lambda c: c.service_id))
 
 
 @dataclass(frozen=True)
@@ -142,55 +182,72 @@ class Professional:
     name: str
     services: tuple[str, ...]       # ids of the services she performs
     work_hours: Optional[tuple[Shift, ...]] = None      # None = follows the salon's business hours
+    login: Optional[str] = None     # e-mail of her access to the app; set only when the access is created
+    commissions: tuple[Commission, ...] = ()       # per service she performs; none = no commission
 
     @classmethod
     def from_input(cls, payload: Mapping[str, Any], id: Optional[str] = None) -> "Professional":
+        """`login` is never taken from here: only creating an access sets it (create_access)."""
         ids = payload.get("services", [])
         if not isinstance(ids, list) or len(ids) > 100 or not all(
                 isinstance(i, str) and ITEM_ID_RE.match(i) for i in ids):
             raise ValidationError("servicos: envie uma lista de ids de serviço")
-        return cls(id or new_id(), _text(payload, "name"), tuple(dict.fromkeys(ids)),
-                   _parse_work_hours(payload.get("work_hours")))
+        services = tuple(dict.fromkeys(ids))
+        return cls(id or new_id(), _text(payload, "name"), services, _parse_work_hours(payload.get("work_hours")),
+                   None, _parse_commissions(payload.get("commissions"), services))
+
+    def commission_for(self, service_id: str, price_cents: int) -> int:
+        """What she earns for performing this service at this price (0 without a commission for it)."""
+        rule = next((c for c in self.commissions if c.service_id == service_id), None)
+        return rule.of(price_cents) if rule else 0
 
     def shift_on(self, weekday: int) -> Optional[Shift]:
         return next((s for s in self.work_hours or () if s.day == weekday), None)
 
     def to_dict(self) -> dict[str, Any]:
         return {"id": self.id, "name": self.name, "services": list(self.services),
-                "work_hours": None if self.work_hours is None else [s.to_dict() for s in self.work_hours]}
+                "work_hours": None if self.work_hours is None else [s.to_dict() for s in self.work_hours],
+                "login": self.login,
+                "commissions": {c.service_id: {"kind": c.kind, "value": c.value} for c in self.commissions}}
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "Professional":
         hours = d.get("work_hours")         # missing in professionals saved before it existed
         return cls(d["id"], d["name"], tuple(d["services"]),
-                   None if hours is None else tuple(Shift(**s) for s in hours))
+                   None if hours is None else tuple(Shift(**s) for s in hours), d.get("login"),
+                   tuple(Commission(sid, r["kind"], r["value"]) for sid, r in sorted((d.get("commissions") or {}).items())))
 
 
 @dataclass(frozen=True)
 class Settings:
-    open_days: tuple[int, ...] = (0, 1, 2, 3, 4, 5)   # 0 = Monday ... 6 = Sunday
-    opens: str = "09:00"
-    closes: str = "19:00"
+    """The salon's business hours: one shift per day it opens, each day with its own times.
+    Default (until the salon saves its own): Monday to Saturday, 09:00-19:00."""
+    hours: tuple[Shift, ...] = tuple(Shift(day, "09:00", "19:00") for day in range(6))
+
+    @property
+    def open_days(self) -> tuple[int, ...]:
+        return tuple(s.day for s in self.hours)
+
+    def shift_on(self, weekday: int) -> Optional[Shift]:
+        """The salon's hours that weekday; None = closed."""
+        return next((s for s in self.hours if s.day == weekday), None)
 
     @classmethod
     def from_input(cls, payload: Mapping[str, Any]) -> "Settings":
-        days = payload.get("open_days")
-        if not isinstance(days, list) or not days or not all(
-                isinstance(d, int) and not isinstance(d, bool) and 0 <= d <= 6 for d in days):
-            raise ValidationError("dias_abertos: lista de 0 (segunda) a 6 (domingo)")
-        opens, closes = parse_time(payload.get("opens")), parse_time(payload.get("closes"))
-        if opens % STEP_MIN or closes % STEP_MIN:
-            raise ValidationError(f"os horários devem ser múltiplos de {STEP_MIN} minutos")
-        if closes - opens < STEP_MIN:
-            raise ValidationError("o salão precisa fechar depois de abrir")
-        return cls(tuple(sorted(set(days))), format_time(opens), format_time(closes))
+        hours = _parse_work_hours(payload.get("hours"), "horário de funcionamento")
+        if not hours:
+            raise ValidationError("horário de funcionamento: o salão precisa abrir em pelo menos um dia")
+        return cls(hours)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"open_days": list(self.open_days), "opens": self.opens, "closes": self.closes}
+        return {"hours": [s.to_dict() for s in self.hours]}
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "Settings":
-        return cls(tuple(d["open_days"]), d["opens"], d["closes"])
+        if "hours" in d:
+            return cls(tuple(Shift(**s) for s in d["hours"]))
+        # saved before each day had its own hours: the same opening and closing on every open day
+        return cls(tuple(Shift(day, d["opens"], d["closes"]) for day in sorted(d["open_days"])))
 
 
 @dataclass(frozen=True)
@@ -206,6 +263,8 @@ class Appointment:
     price_cents: int
     client_name: str
     client_phone: str
+    paid: bool = False              # the client already paid (appointments saved before it existed: not paid)
+    commission_cents: int = 0       # what the professional earns for it, copied when booked (like the price)
 
     @property
     def start_min(self) -> int:
@@ -220,7 +279,7 @@ class Appointment:
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "Appointment":
-        return cls(**{field: d[field] for field in cls.__dataclass_fields__})
+        return cls(**{field: d[field] for field in cls.__dataclass_fields__ if field in d})
 
 
 @dataclass(frozen=True)
@@ -233,7 +292,8 @@ class TimeOff:
     last_day: str
     start: Optional[str]
     end: Optional[str]
-    reason: str
+    reason: str                     # free note, optional
+    kind: str = "other"             # one of TIME_OFF_KINDS (absences saved before it existed: "other")
 
     @classmethod
     def from_input(cls, payload: Mapping[str, Any]) -> "TimeOff":
@@ -256,8 +316,11 @@ class TimeOff:
             if end_min <= start_min:
                 raise ValidationError("ausência: o fim precisa ser depois do início")
             start, end = format_time(start_min), format_time(end_min)
+        kind = payload.get("kind") or "other"
+        if kind not in TIME_OFF_KINDS:
+            raise ValidationError("ausência: tipo inválido")
         return cls(f"{first.isoformat()}_{new_id()}", professional_id, first.isoformat(), last.isoformat(),
-                   start, end, _text(payload, "reason", required=False))
+                   start, end, _text(payload, "reason", required=False), kind)
 
     @property
     def whole_day(self) -> bool:
@@ -274,7 +337,36 @@ class TimeOff:
 
     @classmethod
     def from_dict(cls, d: Mapping[str, Any]) -> "TimeOff":
-        return cls(**{field: d[field] for field in cls.__dataclass_fields__})
+        return cls(**{field: d[field] for field in cls.__dataclass_fields__ if field in d})
+
+
+def parse_name(payload: Mapping[str, Any]) -> str:
+    return _text(payload, "name")
+
+
+def parse_email(payload: Mapping[str, Any]) -> str:
+    email = _text(payload, "email", max_length=120).lower()
+    if not _EMAIL_RE.match(email):
+        raise ValidationError("e-mail inválido")
+    return email
+
+
+@dataclass(frozen=True)
+class Access:
+    """A login to the app, created by the manager. `professional_id`: the professional it belongs to
+    (a service provider); None for someone who does not attend clients (a receptionist, a partner)."""
+    id: str                         # the login's id in the identity provider (Cognito's `sub`)
+    email: str
+    name: str
+    manager: bool
+    professional_id: Optional[str] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: Mapping[str, Any]) -> "Access":
+        return cls(**{field: d[field] for field in cls.__dataclass_fields__ if field in d})
 
 
 def parse_client(payload: Mapping[str, Any]) -> tuple[str, str]:

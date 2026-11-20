@@ -4,7 +4,8 @@ import { addDays } from "./util.js";
 
 export const VIEWS = ["day", "week", "month"];
 export const COLOR_COUNT = 8;                  // .c0 ... .c7 in style.css
-const SHORT_DAYS = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
+export const DAY_NAMES = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];   // 0 = Monday
+const SHORT_DAYS = DAY_NAMES.map((name) => name.slice(0, 3));                                       // "Seg"...
 
 export function parseIso(iso) {
   const [y, m, d] = iso.split("-").map(Number);
@@ -70,12 +71,22 @@ export function viewTitle(view, iso) {
   return capitalize(parseIso(iso).toLocaleDateString("pt-BR", { month: "long", year: "numeric" }));
 }
 
+/** The salon's hours on a weekday (0 = Monday): {day, start, end}, or undefined when it is closed. */
+export function salonShift(settings, day) {
+  return settings.hours.find((s) => s.day === day);
+}
+
 /** [start, end] in minutes when she works that day; null = closed / day off. Mirrors the backend: the
- *  salon's business hours are the outer limit; her own hours (when she has them) are cut to fit them. */
+ *  salon's hours that day are the outer limit; her own hours (when she has them) are cut to fit them. */
 export function workingInterval(settings, professional, iso) {
-  const day = weekday(iso);
-  if (!settings.open_days.includes(day)) return null;
-  let start = toMinutes(settings.opens), end = toMinutes(settings.closes);
+  return weeklyInterval(settings, professional, weekday(iso));
+}
+
+/** Same as workingInterval, for a weekday (0 = Monday) instead of a date. */
+export function weeklyInterval(settings, professional, day) {
+  const salon = salonShift(settings, day);
+  if (!salon) return null;
+  let start = toMinutes(salon.start), end = toMinutes(salon.end);
   if (professional && professional.work_hours) {
     const shift = professional.work_hours.find((s) => s.day === day);
     if (!shift) return null;
@@ -87,8 +98,20 @@ export function workingInterval(settings, professional, iso) {
 
 /** True when some of her hours fall outside the salon's days or hours (that part is never offered). */
 export function hoursOutsideSalon(settings, workHours) {
-  return (workHours || []).some((s) => !settings.open_days.includes(s.day)
-    || toMinutes(s.start) < toMinutes(settings.opens) || toMinutes(s.end) > toMinutes(settings.closes));
+  return (workHours || []).some((s) => {
+    const salon = salonShift(settings, s.day);
+    return !salon || toMinutes(s.start) < toMinutes(salon.start) || toMinutes(s.end) > toMinutes(salon.end);
+  });
+}
+
+/** Times the salon is open but no professional works, in a regular week (absences, which are on
+ *  specific dates, are not counted): [{day, start, end}], sorted by day. Nobody can book them. */
+export function uncoveredHours(settings, professionals) {
+  return [...settings.hours].sort((a, b) => a.day - b.day).flatMap((salon) => {
+    const working = professionals.map((p) => weeklyInterval(settings, p, salon.day)).filter(Boolean);
+    return subtractIntervals([[toMinutes(salon.start), toMinutes(salon.end)]], working)
+      .map(([start, end]) => ({ day: salon.day, start: toTime(start), end: toTime(end) }));
+  });
 }
 
 /** When she is away that day (sick, travelling...): [[start, end]], the whole day being [0, 1440]. */
@@ -126,6 +149,14 @@ export function openIntervals(settings, professionals, iso, timeOffs = []) {
   return merged;
 }
 
+/** When the salon is open that day but no professional can be booked (their hours, their absences):
+ *  [[start, end]]. Shown differently from "closed": it is a staffing gap, not the salon's choice.
+ *  Empty when there are no professionals yet (the agenda shows the salon's hours as open then). */
+export function uncoveredIntervals(settings, professionals, iso, timeOffs = []) {
+  const salon = professionals.length ? workingInterval(settings, null, iso) : null;
+  return salon ? subtractIntervals([salon], openIntervals(settings, professionals, iso, timeOffs)) : [];
+}
+
 /** The gaps between `open` intervals inside [from, to]: the hatched (nobody works) parts of a column. */
 export function closedIntervals(open, from, to) {
   const gaps = [];
@@ -138,10 +169,11 @@ export function closedIntervals(open, from, to) {
   return gaps.filter(([start, end]) => end > start);
 }
 
-/** Whole hours shown by the time grid: the salon's hours (everyone works inside them), stretched to
- *  fit any appointment outside them (made before the hours changed). */
+/** Whole hours shown by the time grid: from the salon's earliest opening to its latest closing (every
+ *  day shares one grid), stretched to fit any appointment outside them (made before the hours changed). */
 export function hourRange(settings, appointments) {
-  let first = toMinutes(settings.opens), last = toMinutes(settings.closes);
+  let first = Math.min(...settings.hours.map((s) => toMinutes(s.start)));
+  let last = Math.max(...settings.hours.map((s) => toMinutes(s.end)));
   for (const a of appointments) {
     first = Math.min(first, toMinutes(a.start));
     last = Math.max(last, toMinutes(a.start) + a.duration_min);

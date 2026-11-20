@@ -4,8 +4,8 @@ import { test } from "node:test";
 
 import {
   availableIntervals, awayIntervals, closedIntervals, colorClass, hourRange, hoursOutsideSalon, layoutColumns,
-  openIntervals, shiftDate, subtractIntervals, toMinutes, toTime, viewTitle, visibleDays, weekday, weekStart,
-  workHoursSummary, workingInterval,
+  openIntervals, shiftDate, subtractIntervals, toMinutes, toTime, uncoveredHours, uncoveredIntervals, viewTitle, visibleDays, weekday,
+  weekStart, workHoursSummary, workingInterval,
 } from "../js/calendar.js";
 import { salonNow } from "../js/util.js";
 
@@ -56,9 +56,9 @@ test("time conversions", () => {
   assert.equal(toTime(0), "00:00");
 });
 
-const SALON = { open_days: [0, 1, 2, 3, 4, 5], opens: "09:00", closes: "19:00" };
-
 const shifts = (days, start, end) => days.map((day) => ({ day, start, end }));
+
+const SALON = { hours: shifts([0, 1, 2, 3, 4, 5], "09:00", "19:00") };           // Monday to Saturday
 
 test("working interval mirrors the backend rule: her hours, inside the salon's", () => {
   assert.deepEqual(workingInterval(SALON, null, "2026-11-16"), [540, 1140]);
@@ -78,6 +78,17 @@ test("hours outside the salon", () => {
   assert.equal(hoursOutsideSalon(SALON, shifts([6], "10:00", "12:00")), true);       // Sunday: closed
   assert.equal(hoursOutsideSalon(SALON, shifts([1], "08:45", "12:00")), true);
   assert.equal(hoursOutsideSalon(SALON, shifts([1], "12:00", "19:15")), true);
+  const shortSaturday = { hours: [...shifts([0], "09:00", "19:00"), ...shifts([5], "09:00", "13:00")] };
+  assert.equal(hoursOutsideSalon(shortSaturday, shifts([0], "14:00", "18:00")), false);
+  assert.equal(hoursOutsideSalon(shortSaturday, shifts([5], "14:00", "18:00")), true);  // Saturday closes at 13:00
+});
+
+test("each day has its own salon hours", () => {
+  const salon = { hours: [...shifts([0], "09:00", "19:00"), ...shifts([5], "08:00", "12:00")] };
+  assert.deepEqual(workingInterval(salon, null, "2026-11-16"), [540, 1140]);         // Monday
+  assert.deepEqual(workingInterval(salon, null, "2026-11-21"), [480, 720]);          // Saturday
+  assert.equal(workingInterval(salon, null, "2026-11-17"), null);                    // Tuesday: closed
+  assert.deepEqual(workingInterval(salon, { work_hours: shifts([5], "10:00", "18:00") }, "2026-11-21"), [600, 720]);
 });
 
 const ABSENCES = [
@@ -122,7 +133,9 @@ test("closed intervals are the gaps, clipped to the grid", () => {
 
 test("hour range covers the salon and any appointment outside it", () => {
   assert.deepEqual(hourRange(SALON, []), [9, 19]);
-  assert.deepEqual(hourRange({ ...SALON, opens: "08:30", closes: "18:15" }, []), [8, 19]);
+  assert.deepEqual(hourRange({ hours: shifts([0], "08:30", "18:15") }, []), [8, 19]);
+  // each day has its own hours: one grid from the earliest opening to the latest closing
+  assert.deepEqual(hourRange({ hours: [...shifts([0], "10:00", "14:00"), ...shifts([5], "08:00", "12:00")] }, []), [8, 14]);
   assert.deepEqual(hourRange(SALON, [{ start: "07:45", duration_min: 30 }, { start: "19:30", duration_min: 60 }]), [7, 21]);
   assert.deepEqual(hourRange(SALON, [{ start: "23:00", duration_min: 120 }]), [9, 24]);
 });
@@ -179,4 +192,29 @@ test("the salon's clock is Brasília time (UTC-3) whatever the device's time zon
   assert.deepEqual(salonNow(new Date("2026-11-19T02:30:00Z")), { date: "2026-11-18", minutes: 23 * 60 + 30 });  // UTC already the 19th
   assert.deepEqual(salonNow(new Date("2026-11-19T03:00:00Z")), { date: "2026-11-19", minutes: 0 });            // midnight in Brasília
   assert.deepEqual(salonNow(new Date("2027-01-01T01:15:00Z")), { date: "2026-12-31", minutes: 22 * 60 + 15 }); // across the year
+});
+
+test("uncovered hours: the salon is open but nobody works", () => {
+  const salon = { hours: [...shifts([0], "09:00", "19:00"), ...shifts([5], "08:00", "12:00")] };   // Mon, Sat
+  assert.deepEqual(uncoveredHours(salon, [{ work_hours: null }]), []);                 // follows the salon: all covered
+  const ana = { work_hours: shifts([0], "09:00", "13:00") };
+  const bia = { work_hours: [...shifts([0], "15:00", "19:00"), ...shifts([5], "08:00", "10:00")] };
+  assert.deepEqual(uncoveredHours(salon, [ana, bia]), [
+    { day: 0, start: "13:00", end: "15:00" },                                         // Monday lunch: nobody
+    { day: 5, start: "10:00", end: "12:00" },                                         // Saturday after Bia leaves
+  ]);
+  assert.deepEqual(uncoveredHours(salon, [{ work_hours: [] }]), [                      // works no day at all
+    { day: 0, start: "09:00", end: "19:00" }, { day: 5, start: "08:00", end: "12:00" }]);
+  assert.deepEqual(uncoveredHours(salon, [ana, bia, { work_hours: null }]), []);
+});
+
+test("uncovered intervals: the salon is open that day, but nobody can be booked", () => {
+  const ana = { id: "a", work_hours: shifts([0], "09:00", "13:00") };
+  const bia = { id: "b", work_hours: shifts([0], "15:00", "19:00") };
+  assert.deepEqual(uncoveredIntervals(SALON, [ana, bia], "2026-11-16"), [[780, 900]]);             // Monday 13-15
+  assert.deepEqual(uncoveredIntervals(SALON, [ana, bia], "2026-11-17"), [[540, 1140]]);            // Tuesday: nobody
+  assert.deepEqual(uncoveredIntervals(SALON, [ana, bia], "2026-11-22"), []);                       // Sunday: closed
+  assert.deepEqual(uncoveredIntervals(SALON, [], "2026-11-16"), []);                               // no professionals yet
+  const away = [{ professional_id: "b", first_day: "2026-11-16", last_day: "2026-11-16", start: null, end: null }];
+  assert.deepEqual(uncoveredIntervals(SALON, [ana, bia], "2026-11-16", away), [[780, 1140]]);       // Bia away all day
 });

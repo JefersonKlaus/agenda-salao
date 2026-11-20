@@ -68,6 +68,39 @@ export function addMinutes(time, minutes) {
 
 export const durationText = (min) => (min >= 60 ? `${Math.floor(min / 60)} h` : "") + (min % 60 ? ` ${min % 60} min` : "");
 
+/** A "⋮" button that opens a small menu of a list row's actions (Editar, Excluir...): the row stays
+ *  clean however many actions it has. `items`: [{ text, onclick, danger }] (falsy ones are skipped).
+ *  The menu is fixed on the screen, so a scrolling list never cuts it; it closes when an action is
+ *  chosen, on a click outside, on Esc or when anything scrolls. */
+export function actionsMenu(label, items) {
+  const list = h("div", { className: "menu-list", role: "menu", hidden: true },
+    items.filter(Boolean).map(({ text, onclick, danger }) => h("button", { role: "menuitem",
+      className: danger ? "danger-item" : null, onclick: (e) => { close(); onclick(e); } }, text)));
+  const button = h("button", { className: "kebab", title: "Ações", "aria-label": `Ações: ${label}`,
+    "aria-haspopup": "menu", "aria-expanded": "false", onclick: () => (list.hidden ? open() : close()) }, "⋮");
+  const outside = (e) => { if (!list.contains(e.target) && e.target !== button) close(); };
+  const keys = (e) => { if (e.key === "Escape") { close(); button.focus(); } };
+  function open() {
+    const r = button.getBoundingClientRect();
+    list.style.top = `${r.bottom + 4}px`;
+    list.style.right = `${document.documentElement.clientWidth - r.right}px`;
+    list.hidden = false;
+    button.setAttribute("aria-expanded", "true");
+    document.addEventListener("click", outside, true);
+    document.addEventListener("keydown", keys);
+    document.addEventListener("scroll", close, true);
+    list.querySelector("button")?.focus();
+  }
+  function close() {
+    list.hidden = true;
+    button.setAttribute("aria-expanded", "false");
+    document.removeEventListener("click", outside, true);
+    document.removeEventListener("keydown", keys);
+    document.removeEventListener("scroll", close, true);
+  }
+  return h("div", { className: "menu" }, button, list);
+}
+
 /** Runs an action with the button disabled, so repeated clicks don't send it twice. */
 export async function whileDisabled(button, action) {
   button.disabled = true;

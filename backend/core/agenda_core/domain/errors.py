@@ -15,3 +15,7 @@ class NotFound(BusinessError):
 
 class SlotConflict(BusinessError):
     status = 409
+
+
+class Forbidden(BusinessError):
+    status = 403

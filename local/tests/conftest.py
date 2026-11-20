@@ -36,6 +36,11 @@ OWNER = "owner-a"
 OTHER = "owner-b"
 
 
+def salon_hours(days, start, end):
+    """PUT /settings body: the salon open on `days` (0 = Monday), from `start` to `end` on each."""
+    return {"hours": [{"day": d, "start": start, "end": end} for d in days]}
+
+
 class FakeClientError(Exception):
     """Mimics botocore.ClientError: has `.response`."""
 

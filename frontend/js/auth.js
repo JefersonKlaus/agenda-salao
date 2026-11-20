@@ -2,6 +2,7 @@
 // CONFIG.skipLogin is only ever set by local/server.py: there is no login and the local server
 // answers every request as the same salon. The deployed API still requires a valid token for everything.
 import { CONFIG } from "./config.js";
+import { forgetDownloads } from "./offline.js";
 
 const STORAGE_KEY = "agenda.tokens";
 const MESSAGES = {
@@ -58,22 +59,18 @@ export async function setNewPassword({ session, email }, password) {
 
 export const isSignedIn = () => Boolean(CONFIG.skipLogin || load()?.idToken);
 
-/** "manager" or "employee", from the ID token's Cognito groups (the local server says it in CONFIG.role).
- *  Only hides what the user cannot do: the API checks the token's groups again on every request. */
-export function role() {
-  if (CONFIG.skipLogin) return CONFIG.role || "manager";
-  let groups = [];
-  try {
-    const payload = load().idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
-    groups = JSON.parse(atob(payload))["cognito:groups"] || [];
-  } catch { /* not a JWT (the browser test's fake token): no groups */ }
-  return groups.includes("employee") && !groups.includes("manager") ? "employee" : "manager";
-}
-
-export const isManager = () => role() === "manager";
+// Who is logged in, as the API says (GET /me, set by app.js when it starts). It only decides what the
+// screen shows: the API checks the token again on every request. Until then (or if unknown), the most
+// restricted: not the manager, no professional.
+let me = { manager: false, professional_id: null };
+export const setMe = (answer) => { me = answer; };
+export const isManager = () => me.manager;
+/** Her professional's id when the login is a service provider; null otherwise. */
+export const myProfessionalId = () => me.professional_id;
 
 export function signOut() {
   cached = null;
+  forgetDownloads();                             // the salon's data does not stay on the device
   try { sessionStorage.removeItem(STORAGE_KEY); } catch { /* no storage */ }
 }
 
@@ -88,5 +85,11 @@ export async function token() {
     const r = await cognito("InitiateAuth", { AuthFlow: "REFRESH_TOKEN_AUTH", AuthParameters: { REFRESH_TOKEN: t.refresh } });
     store(r.AuthenticationResult, t);
     return load().idToken;
-  } catch { signOut(); return null; }
+  } catch (error) {
+    // No connection (fetch fails with a TypeError): keep the login, the agenda shows what was downloaded
+    // and the token is renewed once the connection is back. Any other failure: the login is over.
+    if (error instanceof TypeError) return t.idToken;
+    signOut();
+    return null;
+  }
 }

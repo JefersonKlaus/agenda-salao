@@ -6,7 +6,7 @@ from agenda_core.domain.models import Professional, Settings, Shift, TimeOff
 from agenda_core.domain.scheduling import (away_intervals, fits_business_hours, free_slots, is_past, lock_keys, overlaps,
                               working_interval)
 
-SETTINGS = Settings(open_days=(0, 1, 2, 3, 4, 5), opens="09:00", closes="12:00")
+SETTINGS = Settings(tuple(Shift(day, "09:00", "12:00") for day in range(6)))      # Monday to Saturday
 MONDAY, SUNDAY = date(2026, 11, 16), date(2026, 11, 22)
 
 
@@ -110,3 +110,14 @@ def test_away_intervals():
     assert away_intervals(offs, "p1", "2026-11-17") == [(0, 1440), (840, 960)]
     assert away_intervals(offs, "p2", "2026-11-17") == [(540, 600)]
     assert away_intervals(offs, "p1", "2026-11-19") == []
+
+
+def test_each_day_has_its_own_salon_hours():
+    settings = Settings((Shift(0, "09:00", "12:00"), Shift(5, "08:00", "10:00")))     # Monday and Saturday
+    saturday = date(2026, 11, 21)
+    assert working_interval(settings, MONDAY) == (540, 720)
+    assert working_interval(settings, saturday) == (480, 600)
+    assert working_interval(settings, date(2026, 11, 17)) is None                     # Tuesday: closed
+    assert free_slots(settings, saturday, 60, []) == ["08:00", "08:15", "08:30", "08:45", "09:00"]
+    her = Professional("p1", "Ana", (), (Shift(5, "09:00", "18:00"),))
+    assert working_interval(settings, saturday, her) == (540, 600)                    # cut at Saturday's closing

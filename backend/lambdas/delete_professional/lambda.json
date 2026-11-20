@@ -1,4 +1,5 @@
 {
   "route": "DELETE /professionals/{id}",
-  "database": "write"
+  "database": "write",
+  "identity": true
 }

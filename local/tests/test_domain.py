@@ -55,18 +55,32 @@ def test_professional_removes_duplicates_and_validates_ids():
             Professional.from_input({"name": "Ana", "services": bad})
 
 
-def test_settings_defaults_and_validation():
-    s = Settings.from_input({"open_days": [5, 1, 1], "opens": "08:00", "closes": "18:30"})
+def day(d, start="08:00", end="18:00"):
+    return {"day": d, "start": start, "end": end}
+
+
+def test_settings_each_day_has_its_own_hours():
+    s = Settings.from_input({"hours": [day(5, "09:00", "13:00"), day(1, "08:00", "18:30")]})
     assert s.open_days == (1, 5) and Settings.from_dict(s.to_dict()) == s
-    bad_inputs = [{"open_days": [], "opens": "08:00", "closes": "18:00"},
-                  {"open_days": [7], "opens": "08:00", "closes": "18:00"},
-                  {"open_days": [True], "opens": "08:00", "closes": "18:00"},
-                  {"open_days": [1], "opens": "18:00", "closes": "08:00"},
-                  {"open_days": [1], "opens": "08:10", "closes": "18:00"},
-                  {"open_days": [1], "opens": "08:00", "closes": "08:00"}]
+    assert s.shift_on(5) == Shift(5, "09:00", "13:00") and s.shift_on(1).end == "18:30"
+    assert s.shift_on(0) is None                                            # closed on Monday
+    assert Settings().open_days == (0, 1, 2, 3, 4, 5) and Settings().shift_on(0).start == "09:00"
+
+
+def test_settings_validation():
+    bad_inputs = [{"hours": []},                                         # never opens
+                  {}, {"hours": None}, {"open_days": [1], "opens": "08:00", "closes": "18:00"},   # old format
+                  {"hours": [day(7)]}, {"hours": [day(True)]}, {"hours": [day(1), day(1)]},
+                  {"hours": [day(1, "18:00", "08:00")]}, {"hours": [day(1, "08:10")]},
+                  {"hours": [day(1, "08:00", "08:00")]}]
     for payload in bad_inputs:
         with pytest.raises(ValidationError):
             Settings.from_input(payload)
+
+
+def test_settings_saved_before_per_day_hours_are_still_read():
+    old = Settings.from_dict({"open_days": [2, 1], "opens": "08:00", "closes": "12:00"})
+    assert old.hours == (Shift(1, "08:00", "12:00"), Shift(2, "08:00", "12:00"))
 
 
 @pytest.mark.parametrize("given, phone", [
@@ -151,3 +165,14 @@ def test_time_off_whole_days_and_hours():
 def test_time_off_rejects_bad_input(payload, fragment):
     with pytest.raises(ValidationError, match=fragment):
         TimeOff.from_input(payload)
+
+
+def test_time_off_kind():
+    base = {"professional_id": "aaaaaaaa", "first_day": "2026-12-01", "last_day": "2026-12-15"}
+    assert TimeOff.from_input({**base, "kind": "vacation"}).kind == "vacation"
+    assert TimeOff.from_input(base).kind == "other"                                   # not chosen
+    with pytest.raises(ValidationError):
+        TimeOff.from_input({**base, "kind": "party"})
+    saved_before_kinds = {"id": "2026-12-01_aaaaaaaa", "professional_id": "aaaaaaaa", "first_day": "2026-12-01",
+                          "last_day": "2026-12-01", "start": None, "end": None, "reason": "Doente"}
+    assert TimeOff.from_dict(saved_before_kinds).kind == "other"

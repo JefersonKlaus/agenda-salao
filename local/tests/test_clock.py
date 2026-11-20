@@ -25,6 +25,7 @@ def machine_time_zone():
     time.tzset()
 
 
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="Windows cannot change a process's time zone (no time.tzset); runs on CI (Linux)")
 @pytest.mark.parametrize("zone", ["UTC", "Asia/Tokyo", "America/New_York", "America/Sao_Paulo"])
 def test_salon_now_is_brasilia_time_on_any_machine(machine_time_zone, zone):
     machine_time_zone(zone)

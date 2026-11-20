@@ -15,13 +15,14 @@ import json
 from datetime import date, timedelta
 from typing import Any, Optional
 
-from ..domain.models import MAX_TIME_OFF_DAYS, MODELS, Appointment, Settings, TimeOff
+from ..domain.models import MAX_TIME_OFF_DAYS, MODELS, Access, Appointment, Settings, TimeOff
 from ..domain.errors import SlotConflict
 from ..domain.scheduling import lock_keys
 
 PREFIXES = {"service": "SERV#", "professional": "PROF#"}
 SETTINGS_KEY, APPOINTMENT_PREFIX, LOCK_PREFIX, OWNER_PREFIX = "CONF", "AGE#", "TRAVA#", "SALAO#"
 TIME_OFF_PREFIX = "OFF#"            # newer than the others, so its name is in English
+ACCESS_PREFIX = "USER#"             # the salon's logins created in the app (id = Cognito's sub)
 DATA_ATTRIBUTE = "dados"
 
 # English field name (code) -> field name stored in the table. Fields not listed are stored as is.
@@ -106,8 +107,12 @@ class DynamoRepository:
         return Settings.from_dict(data) if data else None
 
     def save_settings(self, owner: str, settings: Settings) -> None:
+        # Also the old single-window fields (earliest opening, latest closing), so a rollback to a
+        # version from before per-day hours can still read the item. `hours` wins when present.
+        legacy = {"open_days": list(settings.open_days), "opens": min(s.start for s in settings.hours),
+                  "closes": max(s.end for s in settings.hours)}
         self.client.put_item(TableName=self.table,
-                             Item=self._item(owner, SETTINGS_KEY, settings.to_dict()))
+                             Item=self._item(owner, SETTINGS_KEY, {**legacy, **settings.to_dict()}))
 
     # -------------------------------------------------------------- appointments
     def appointments_on_day(self, owner: str, date: str) -> list[Appointment]:
@@ -122,14 +127,8 @@ class DynamoRepository:
         """In one transaction: rewrites the appointment, frees the old professional's locks and takes the
         new one's. It only goes through if the appointment is still exactly `old` (not cancelled or
         changed meanwhile) and nobody took the new professional's time."""
-        key = self._key(owner, f"{APPOINTMENT_PREFIX}{old.id}")
-        stored = self.client.get_item(TableName=self.table, Key=key, ConsistentRead=True).get("Item")
-        if stored is None or Appointment.from_dict(from_storage(json.loads(stored[DATA_ATTRIBUTE]["S"]))) != old:
-            raise SlotConflict("esse agendamento acabou de ser alterado; atualize a agenda")
         not_exists = "attribute_not_exists(PK)"
-        operations = [{"Put": {"TableName": self.table, "Item": self._item(owner, f"{APPOINTMENT_PREFIX}{new.id}", new.to_dict()),
-                               "ConditionExpression": "#d = :old", "ExpressionAttributeNames": {"#d": DATA_ATTRIBUTE},
-                               "ExpressionAttributeValues": {":old": stored[DATA_ATTRIBUTE]}}}]
+        operations = [self._rewrite_if_unchanged(owner, old, new)]
         for k in lock_keys(old.professional_id, old.date, old.start_min, old.duration_min):
             operations.append({"Delete": {"TableName": self.table, "Key": self._key(owner, f"{LOCK_PREFIX}{k}")}})
         for k in lock_keys(new.professional_id, new.date, new.start_min, new.duration_min):
@@ -141,6 +140,28 @@ class DynamoRepository:
             if _is_condition_failure(error):
                 raise SlotConflict("esse horário acabou de ser ocupado") from None
             raise
+
+    def update_appointment(self, owner: str, old: Appointment, new: Appointment) -> None:
+        """Rewrites the appointment (same time and professional: the locks stay), only if it is still
+        exactly `old`: two people changing it at once do not overwrite each other."""
+        operation = self._rewrite_if_unchanged(owner, old, new)
+        try:
+            self.client.transact_write_items(TransactItems=[operation])
+        except Exception as error:      # botocore.ClientError, without importing botocore here
+            if _is_condition_failure(error):
+                raise SlotConflict("esse agendamento acabou de ser alterado; atualize a agenda") from None
+            raise
+
+    def _rewrite_if_unchanged(self, owner: str, old: Appointment, new: Appointment) -> dict[str, Any]:
+        """The transaction step that replaces `old` by `new`, conditioned on the stored item being
+        exactly what was read: a change made meanwhile by someone else is never overwritten."""
+        key = self._key(owner, f"{APPOINTMENT_PREFIX}{old.id}")
+        stored = self.client.get_item(TableName=self.table, Key=key, ConsistentRead=True).get("Item")
+        if stored is None or Appointment.from_dict(from_storage(json.loads(stored[DATA_ATTRIBUTE]["S"]))) != old:
+            raise SlotConflict("esse agendamento acabou de ser alterado; atualize a agenda")
+        return {"Put": {"TableName": self.table, "Item": self._item(owner, f"{APPOINTMENT_PREFIX}{new.id}", new.to_dict()),
+                        "ConditionExpression": "#d = :old", "ExpressionAttributeNames": {"#d": DATA_ATTRIBUTE},
+                        "ExpressionAttributeValues": {":old": stored[DATA_ATTRIBUTE]}}}
 
     # -------------------------------------------------------------- absences
     def time_off_between(self, owner: str, first: str, last: str) -> list[TimeOff]:
@@ -155,11 +176,25 @@ class DynamoRepository:
         self.client.put_item(TableName=self.table,
                              Item=self._item(owner, f"{TIME_OFF_PREFIX}{time_off.id}", time_off.to_dict()))
 
+    def get_time_off(self, owner: str, id: str) -> Optional[TimeOff]:
+        data = self._read(owner, f"{TIME_OFF_PREFIX}{id}")
+        return TimeOff.from_dict(data) if data else None
+
     def delete_time_off(self, owner: str, id: str) -> bool:
         if self._read(owner, f"{TIME_OFF_PREFIX}{id}") is None:
             return False
         self.client.delete_item(TableName=self.table, Key=self._key(owner, f"{TIME_OFF_PREFIX}{id}"))
         return True
+
+    # -------------------------------------------------------------- accesses
+    def list_accesses(self, owner: str) -> list[Access]:
+        return [Access.from_dict(d) for d in self._query_prefix(owner, ACCESS_PREFIX)]
+
+    def save_access(self, owner: str, access: Access) -> None:
+        self.client.put_item(TableName=self.table, Item=self._item(owner, f"{ACCESS_PREFIX}{access.id}", access.to_dict()))
+
+    def delete_access(self, owner: str, id: str) -> None:
+        self.client.delete_item(TableName=self.table, Key=self._key(owner, f"{ACCESS_PREFIX}{id}"))
 
     def get_appointment(self, owner: str, id: str) -> Optional[Appointment]:
         data = self._read(owner, f"{APPOINTMENT_PREFIX}{id}")

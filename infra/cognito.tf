@@ -20,6 +20,31 @@ resource "aws_cognito_user_pool" "salon" {
     temporary_password_validity_days = 7
   }
 
+  # Written when the manager creates a login in the app (create_access): the salon it belongs to and,
+  # for a service provider, her professional. Immutable: set once, at creation, and never changed by
+  # anyone, so a login cannot move itself to another salon or professional. The token carries them.
+  schema {
+    name                     = "salon"
+    attribute_data_type      = "String"
+    mutable                  = false
+    developer_only_attribute = false
+    string_attribute_constraints {
+      min_length = 1
+      max_length = 64
+    }
+  }
+
+  schema {
+    name                     = "professional_id"
+    attribute_data_type      = "String"
+    mutable                  = false
+    developer_only_attribute = false
+    string_attribute_constraints {
+      min_length = 1
+      max_length = 16
+    }
+  }
+
   account_recovery_setting {
     recovery_mechanism {
       name     = "verified_email"
@@ -36,6 +61,7 @@ resource "aws_cognito_user_pool_client" "site" {
   explicit_auth_flows = ["ALLOW_USER_PASSWORD_AUTH", "ALLOW_REFRESH_TOKEN_AUTH"]
 
   prevent_user_existence_errors = "ENABLED"
+  write_attributes              = ["email", "name"] # never custom:salon / custom:professional_id
   enable_token_revocation       = true
 
   access_token_validity  = 60
@@ -47,4 +73,18 @@ resource "aws_cognito_user_pool_client" "site" {
     id_token      = "minutes"
     refresh_token = "days"
   }
+}
+
+# What a login may do. The salon's own account (created by the "Create salon user" workflow, with no
+# custom:salon) is the manager even in no group; a login created in the app is in one of these.
+resource "aws_cognito_user_group" "manager" {
+  name         = "manager"
+  user_pool_id = aws_cognito_user_pool.salon.id
+  description  = "Gerente: tudo"
+}
+
+resource "aws_cognito_user_group" "employee" {
+  name         = "employee"
+  user_pool_id = aws_cognito_user_pool.salon.id
+  description  = "Funcionaria: ve a agenda e os servicos; registra as proprias ausencias"
 }

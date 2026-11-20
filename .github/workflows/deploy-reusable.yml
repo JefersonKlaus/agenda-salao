@@ -70,7 +70,7 @@ jobs:
             '{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]}'
           echo "bucket=$BUCKET" >> "$GITHUB_OUTPUT"
 
-      - name: Terraform init and apply
+      - name: Terraform init and plan
         working-directory: infra
         run: |
           terraform init -input=false \
@@ -78,9 +78,30 @@ jobs:
             -backend-config="key=agenda-salao/${ENVIRONMENT}.tfstate" \
             -backend-config="region=${AWS_REGION}" \
             -backend-config="use_lockfile=true"
-          terraform apply -auto-approve -input=false \
+          terraform plan -input=false -out=tfplan \
             -var="environment=${ENVIRONMENT}" \
             -var="region=${AWS_REGION}"
+
+      # The data lives in two resources: the Cognito user pool (every login) and the DynamoDB table
+      # (everything else). A change that would delete or recreate either one stops the deploy here,
+      # before anything is applied: that must be decided by a person, never by a push.
+      - name: Refuse a plan that would delete the logins or the data
+        working-directory: infra
+        run: |
+          terraform show -json tfplan > plan.json
+          DANGER="$(jq -r '.resource_changes[]
+            | select(.type == "aws_cognito_user_pool" or .type == "aws_dynamodb_table")
+            | select(.change.actions | index("delete"))
+            | .address' plan.json)"
+          if [ -n "$DANGER" ]; then
+            echo "::error::This deploy would delete or recreate: $DANGER. Nothing was applied."
+            exit 1
+          fi
+          echo "Plan checked: no user pool or table is deleted." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Terraform apply (exactly the plan that was checked)
+        working-directory: infra
+        run: terraform apply -input=false tfplan
 
       - name: Generate frontend/js/config.js with the AWS data
         working-directory: infra

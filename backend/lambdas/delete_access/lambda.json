@@ -1,0 +1,5 @@
+{
+  "route": "DELETE /access/{id}",
+  "database": "write",
+  "identity": true
+}

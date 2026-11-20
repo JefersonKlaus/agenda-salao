@@ -23,6 +23,8 @@ class Request:
     body: dict[str, Any]
     query: dict[str, str]
     id: Optional[str]                   # the {id} in the route, when it has one
+    manager: bool                       # Cognito group: the manager (True) or an employee
+    professional_id: Optional[str]      # the professional this login is (a service provider), if any
 
 
 Action = Callable[[Dependencies, Request], Any]
@@ -36,14 +38,16 @@ def endpoint(action: Action, *, status: int = 200, manager_only: bool = False,
     def handle(event: dict[str, Any], deps: Dependencies) -> dict[str, Any]:
         try:
             owner = _owner(event)
-            if manager_only and _role(event) != MANAGER:
+            manager = _role(event) == MANAGER
+            if manager_only and not manager:
                 return response(403, {"error": "só a gerente pode fazer isso"})
             id = (event.get("pathParameters") or {}).get("id")
             if id_pattern is not None and not (isinstance(id, str) and id_pattern.match(id)):
                 return response(404, {"error": "rota não encontrada"})
             method = event["requestContext"]["http"]["method"]
             request = Request(owner, _body(event) if method in ("POST", "PUT") else {},
-                              event.get("queryStringParameters") or {}, id)
+                              event.get("queryStringParameters") or {}, id, manager,
+                              _claims(event).get("custom:professional_id") or None)
             result = action(deps, request)
             return response(status, None if status == 204 else result)
         except PermissionError:
@@ -61,28 +65,38 @@ def response(status: int, body: Any = None) -> dict[str, Any]:
             "body": "" if body is None else json.dumps(body, ensure_ascii=False)}
 
 
-def _owner(event: dict[str, Any]) -> str:
-    """Never taken from the body: that is what keeps each salon's data apart."""
+def _claims(event: dict[str, Any]) -> dict[str, Any]:
+    """The token's claims, already verified by API Gateway's JWT authorizer."""
     try:
-        sub = event["requestContext"]["authorizer"]["jwt"]["claims"]["sub"]
+        claims = event["requestContext"]["authorizer"]["jwt"]["claims"]
     except (KeyError, TypeError):
-        sub = None
-    if not isinstance(sub, str) or not sub:
+        return {}
+    return claims if isinstance(claims, dict) else {}
+
+
+def _owner(event: dict[str, Any]) -> str:
+    """The salon: `custom:salon` for the logins the manager creates in the app (written in the login,
+    unchangeable), or the login itself (`sub`) for the salon's own account. Never taken from the body:
+    that is what keeps each salon's data apart."""
+    claims = _claims(event)
+    owner = claims.get("custom:salon") or claims.get("sub")
+    if not isinstance(owner, str) or not owner:
         raise PermissionError
-    return sub
+    return owner
 
 
 def _role(event: dict[str, Any]) -> str:
     """From the token's `cognito:groups`. API Gateway hands a list claim over as a string such as
-    "[employee]" or "[manager employee]". A user in no group is the manager: the accounts created
-    before the groups existed are all the salon's manager."""
-    try:
-        groups = event["requestContext"]["authorizer"]["jwt"]["claims"].get("cognito:groups") or []
-    except (KeyError, TypeError, AttributeError):
-        groups = []
+    "[employee]" or "[manager employee]". The salon's own account (no `custom:salon`) is the manager
+    even in no group, as it was before groups existed; a login created in the app is the manager only
+    when it is in that group."""
+    claims = _claims(event)
+    groups = claims.get("cognito:groups") or []
     if isinstance(groups, str):
         groups = groups.strip("[]").replace(",", " ").split()
-    return EMPLOYEE if EMPLOYEE in groups and MANAGER not in groups else MANAGER
+    if MANAGER in groups:
+        return MANAGER
+    return EMPLOYEE if EMPLOYEE in groups or claims.get("custom:salon") else MANAGER
 
 
 def _body(event: dict[str, Any]) -> dict[str, Any]:

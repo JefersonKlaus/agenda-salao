@@ -5,7 +5,7 @@ from agenda_core.adapters.aws import aws_dependencies
 
 from .use_case import cancel_appointment
 
-handle = endpoint(lambda deps, r: cancel_appointment(deps, r.owner, r.id), status=204)
+handle = endpoint(lambda deps, r: cancel_appointment(deps, r.owner, r.id), status=204, manager_only=True)
 
 
 def lambda_handler(event, context):

@@ -1,0 +1,4 @@
+{
+  "route": "PUT /appointments/{id}/payment",
+  "database": "write"
+}

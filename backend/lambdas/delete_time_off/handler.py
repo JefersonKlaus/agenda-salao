@@ -5,7 +5,7 @@ from agenda_core.adapters.aws import aws_dependencies
 
 from .use_case import delete_time_off
 
-handle = endpoint(lambda deps, r: delete_time_off(deps, r.owner, r.id), status=204)
+handle = endpoint(lambda deps, r: delete_time_off(deps, r.owner, r.id, r.manager, r.professional_id), status=204)
 
 
 def lambda_handler(event, context):

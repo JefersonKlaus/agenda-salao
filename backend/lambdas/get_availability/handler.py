@@ -6,7 +6,9 @@ from agenda_core.adapters.aws import aws_dependencies
 from .use_case import get_availability
 
 handle = endpoint(lambda deps, r: get_availability(deps, r.owner, r.query.get("date"), r.query.get("service_id"),
-                                             r.query.get("professional_id")))
+                                             r.query.get("professional_id"),
+                                             include_past=r.query.get("include_past") == "true"),
+                  manager_only=True)
 
 
 def lambda_handler(event, context):

@@ -13,10 +13,18 @@ Needs Python 3.12+ (and Node 22 for the frontend checks). Or open the folder in 
 ```bash
 python dev.py setup             # once: creates .venv/ and downloads Chromium
 python dev.py serve             # http://127.0.0.1:8765  as the manager
-python dev.py serve employee    # same, as an employee (cannot change services, professionals, settings)
+python dev.py serve employee --professional Ana   # as Ana's employee login: agenda, services, her absences
+python dev.py serve --connection off   # start with no internet: the site loads, every API call fails
 ```
 
-No AWS, no login, no configuration. Data lives in memory and is gone when you stop the server.
+While it runs, type `off` or `on` + Enter in its terminal to drop or restore the connection:
+browse online, type `off`, and the agenda keeps showing what was downloaded.
+
+No AWS, no login, no configuration. It opens with demo data, so it looks like a salon in use:
+18 services, 22 professionals and 12 logins (enough for a few pages, and names with accents to
+try the search), each with her own hours and commission, a busy agenda from last week to two weeks ahead
+and a few absences ([local/seed.py](local/seed.py), always dated around today). Add `--empty` to
+start like a brand-new salon. Data lives in memory and is gone when you stop the server.
 
 ## Run the tests
 
@@ -80,7 +88,7 @@ backend/
     ports.py         what use cases need: Repository, Clock
     application.py   rules shared by several use cases
     adapters/        DynamoDB, clock, API Gateway input (login, role, errors)
-  lambdas/<action>/  book_appointment, list_services, save_settings, ... (18)
+  lambdas/<action>/  book_appointment, list_services, get_finance, ... (20)
     use_case.py      the action (only domain + ports, never AWS)
     handler.py       API Gateway event -> use case -> HTTP response
     lambda.json      {"route": "POST /appointments", "database": "write"}
@@ -94,8 +102,14 @@ Rules worth knowing:
 - The salon id comes from the login token, never from the request.
 - No double booking: an appointment and its 15-minute "locks" are written in one transaction.
 - All times are Brasília time (UTC-3), whatever the server's time zone.
-- Employees (Cognito group `employee`) get 403 when changing services, professionals or settings.
-  Users in no group are the manager.
+- Commission: per professional and per service, % of the price or a fixed amount. Like the price, it
+  is copied into each appointment when booked: changing it later does not change the past.
+- Logins: the salon's own account (created by the *Create salon user* workflow) is the manager. The
+  manager creates the others in **Acessos** (or "Criar acesso" in Profissionais): Cognito writes the
+  salon (`custom:salon`) and, for a service provider, her professional (`custom:professional_id`) in
+  the login, immutable; the group (`manager` / `employee`) says what it may do.
+- An employee sees only the Agenda and Serviços, books nothing, and registers or removes only her
+  own absences. Everything else answers 403. The manager may also book in the past.
 - Data in DynamoDB keeps Portuguese field names (`nome`, `SALAO#`...) for compatibility; only
   `adapters/dynamo_repository.py` knows them.
 
@@ -107,12 +121,22 @@ DynamoDB. It only listens on 127.0.0.1.
 
 ## Deploy
 
-Everything goes through GitHub Actions. Two environments, each in its own AWS account:
+Everything goes through GitHub Actions, with no terminal: a push runs every test (Python, JS and the
+browser test), then Terraform creates or updates all of AWS (Lambdas, API, Cognito, table, site),
+then the site is published. Two environments, each in its own AWS account:
 
 | Environment | Deploys when |
 |---|---|
 | `dev` | every push to the `dev` branch |
-| `prod` | Actions → *Deploy production* → *Run workflow* on `main`, typing `producao` |
+| `prod` | every push to `main` (a merged PR); also by hand: Actions → *Deploy production* → *Run workflow*, typing `producao` |
+
+```
+push ──► tests (CI) ──► terraform plan ──► check the plan ──► terraform apply ──► publish the site
+```
+
+The deploy **refuses a plan that would delete or recreate the Cognito user pool or the DynamoDB
+table** (every login and all the data): that stops it before anything is applied. To require an
+approval before each production deploy, set *Required reviewers* on the `producao` Environment.
 
 ### One-time setup
 
@@ -123,6 +147,8 @@ Everything goes through GitHub Actions. Two environments, each in its own AWS ac
    - secrets `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`
    - variables `AWS_ACCOUNT_ID` (the deploy stops if the key is from another account) and `AWS_REGION`
 3. **First deploy:** create the `dev` branch. The site's address shows up in the Actions run summary.
+4. Recommended for `producao`: *Required reviewers* (you approve each deploy) and *Deployment
+   branches* = only `main`.
 
 ### Create a salon login
 

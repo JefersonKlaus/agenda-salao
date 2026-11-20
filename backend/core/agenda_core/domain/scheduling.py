@@ -30,9 +30,10 @@ def working_interval(settings: Settings, day: date,
     """[start, end) in minutes when appointments can happen on `day`. The salon's business hours are
     the outer limit: a professional with hours of her own works them only inside that window; one
     without them works the whole window. None = closed / does not work that day."""
-    if day.weekday() not in settings.open_days:
+    salon = settings.shift_on(day.weekday())
+    if salon is None:
         return None
-    start, end = parse_time(settings.opens), parse_time(settings.closes)
+    start, end = parse_time(salon.start), parse_time(salon.end)
     if professional is not None and professional.work_hours is not None:
         shift = professional.shift_on(day.weekday())
         if shift is None:

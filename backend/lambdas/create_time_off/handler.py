@@ -7,7 +7,7 @@ from .use_case import create_time_off
 
 
 def _action(deps, request):
-    time_off, affected = create_time_off(deps, request.owner, request.body)
+    time_off, affected = create_time_off(deps, request.owner, request.body, request.manager, request.professional_id)
     return {"time_off": time_off.to_dict(), "affected": [a.to_dict() for a in affected]}
 
 

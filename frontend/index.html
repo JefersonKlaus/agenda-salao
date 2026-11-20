@@ -16,7 +16,14 @@
     <aside id="sidebar" aria-label="Menu" hidden>
       <strong class="brand">Agenda do Salão</strong>
       <nav id="menu"></nav>
-      <div class="sidebar-footer"><button id="logout" class="link">Sair</button></div>
+      <div class="sidebar-footer">
+        <!-- the salon's settings, the manager's only: kept apart from the day-to-day pages -->
+        <div id="settings-group" hidden>
+          <span class="nav-group-title" id="settings-title">Configurações</span>
+          <nav id="settings-menu" aria-labelledby="settings-title"></nav>
+        </div>
+        <button id="logout" class="link">Sair</button>
+      </div>
     </aside>
     <div id="backdrop" hidden></div>
     <main id="content"><p class="notice">Carregando…</p></main>

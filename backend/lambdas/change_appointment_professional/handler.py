@@ -5,7 +5,8 @@ from agenda_core.adapters.aws import aws_dependencies
 
 from .use_case import change_appointment_professional
 
-handle = endpoint(lambda deps, r: change_appointment_professional(deps, r.owner, r.id, r.body).to_dict())
+handle = endpoint(lambda deps, r: change_appointment_professional(deps, r.owner, r.id, r.body).to_dict(),
+                  manager_only=True)
 
 
 def lambda_handler(event, context):

@@ -78,7 +78,7 @@ def test_appointments_between_is_inclusive_and_only_returns_appointments(repo):
 
 def test_settings_empty_then_saved(repo):
     assert repo.get_settings(OWNER) is None
-    settings = Settings((1, 2), "08:00", "12:00")
+    settings = Settings((Shift(1, "08:00", "12:00"), Shift(2, "13:00", "18:00")))
     repo.save_settings(OWNER, settings)
     assert repo.get_settings(OWNER) == settings and repo.get_settings(OTHER) is None
 
@@ -151,12 +151,18 @@ def test_writes_the_existing_storage_format():
     repo = DynamoRepository(db, "t")
     repo.save(OWNER, "service", Service("aaaaaaaa", "Haircut", 60, 8000))
     repo.save(OWNER, "professional", Professional("bbbbbbbb", "Ana", ("aaaaaaaa",)))
-    repo.save_settings(OWNER, Settings((1, 2), "08:00", "12:00"))
+    repo.save_settings(OWNER, Settings((Shift(1, "08:00", "12:00"), Shift(2, "08:00", "12:00"))))
     repo.create_appointment(OWNER, Appointment("2026-11-17_1000_cccccccc", "2026-11-17", "10:00", 30,
                                                "bbbbbbbb", "Ana", "aaaaaaaa", "Haircut", 8000, "Maria", ""))
     # the only changes since then are new fields, which older code simply ignores
-    assert _stored(db) == {**LEGACY_ITEMS, "PROF#bbbbbbbb": {**LEGACY_ITEMS["PROF#bbbbbbbb"], "work_hours": None},
-                           "SERV#aaaaaaaa": {**LEGACY_ITEMS["SERV#aaaaaaaa"], "active": True}}
+    # per-day hours are a new field; the old ones stay, so older code can still read the item
+    hours = [{"day": d, "start": "08:00", "end": "12:00"} for d in (1, 2)]
+    assert _stored(db) == {**LEGACY_ITEMS, "PROF#bbbbbbbb": {**LEGACY_ITEMS["PROF#bbbbbbbb"], "work_hours": None, "login": None,
+                                            "commissions": {}},
+                           "SERV#aaaaaaaa": {**LEGACY_ITEMS["SERV#aaaaaaaa"], "active": True},
+                           "CONF": {**LEGACY_ITEMS["CONF"], "hours": hours},
+                           "AGE#2026-11-17_1000_cccccccc": {**LEGACY_ITEMS["AGE#2026-11-17_1000_cccccccc"], "paid": False,
+                                                            "commission_cents": 0}}
 
 
 def test_reads_items_already_in_the_table():
@@ -168,7 +174,7 @@ def test_reads_items_already_in_the_table():
     assert repo.get(OWNER, "service", "aaaaaaaa") == Service("aaaaaaaa", "Haircut", 60, 8000)
     assert repo.list_items(OWNER, "professional") == [Professional("bbbbbbbb", "Ana", ("aaaaaaaa",))]
     assert repo.list_items(OWNER, "professional")[0].work_hours is None          # = follows the salon
-    assert repo.get_settings(OWNER) == Settings((1, 2), "08:00", "12:00")
+    assert repo.get_settings(OWNER) == Settings((Shift(1, "08:00", "12:00"), Shift(2, "08:00", "12:00")))
     [existing] = repo.appointments_on_day(OWNER, "2026-11-17")
     assert (existing.client_name, existing.start, existing.service_name) == ("Maria", "10:00", "Haircut")
     with pytest.raises(SlotConflict):                               # its locks still hold the slot

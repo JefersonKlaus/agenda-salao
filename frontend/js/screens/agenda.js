@@ -1,16 +1,22 @@
 // The agenda, Google Calendar style: day, week and month views, one color per professional.
 // The day view has one column per professional who works that day (each her own schedule); the
-// filter shows just one. Hatched = nobody (or the selected professional) can be booked then.
+// filter shows just one. Hatched gray = the salon is closed (or that professional does not work then);
+// hatched yellow, with a note = the salon is open but no professional at all can be booked. What
+// already passed is shaded. Hatched areas never open the booking; past ones only for the manager, who
+// records what happened (employees cannot book, change or cancel what already passed).
 // Absences (sick, travelling...) show as "Ausente" blocks, or in the all-day strip when they take the
 // whole day; appointments that fall inside one get a ⚠. Click an empty spot to book there; click an
 // appointment to see it, cancel it or give it to another professional.
 import { api } from "../api.js";
+import { isManager, myProfessionalId } from "../auth.js";
+import { isOnline, missingDays, onConnectionChange } from "../offline.js";
 import {
   availableIntervals, awayIntervals, closedIntervals, colorClass, hourRange, layoutColumns, openIntervals,
-  parseIso, shiftDate, toMinutes, toTime, viewTitle, VIEWS, visibleDays, weekday,
+  parseIso, shiftDate, subtractIntervals, toMinutes, toTime, uncoveredIntervals, viewTitle, VIEWS, visibleDays, weekday,
+  workingInterval,
 } from "../calendar.js";
 import { h, prettyDate, render, salonNow, today } from "../util.js";
-import { openAppointmentDialog, openBookingDialog, openTimeOffDetails, openTimeOffDialog } from "./agenda-dialogs.js";
+import { absenceLabel, openAppointmentDialog, openBookingDialog, openTimeOffDetails, openTimeOffDialog } from "./agenda-dialogs.js";
 
 const HOUR_PX = 48;                            // keep in sync with --hour in style.css
 const MONTH_CHIPS = 3;                         // items listed per day in the month view
@@ -49,7 +55,8 @@ export async function mount(container) {
   const toolbar = h("div", { className: "cal-toolbar" });
   const filterBar = h("div", { className: "cal-filter", role: "group", "aria-label": "Profissionais" });
   const body = h("div", { className: "cal-body" });
-  render(container, toolbar, filterBar, body);
+  const offlineNote = h("p", { className: "offline-note", hidden: true });   // offline: days never downloaded
+  render(container, toolbar, filterBar, offlineNote, body);
 
   const selected = () => professionals.find((p) => p.id === view.professionalId) || null;
   /** Who the hatching and the items are about: the selected professional, or everybody. */
@@ -75,21 +82,43 @@ export async function mount(container) {
       if (current !== request) return;         // the user has already moved to another period
       appointments = found;
       timeOffs = away;
+      // Offline, what is shown came from earlier downloads: say which days of it never were.
+      const missing = isOnline() ? [] : missingDays(period);
+      offlineNote.hidden = missing.length === 0;
+      offlineNote.textContent = missing.length === days.length
+        ? "Este período ainda não foi baixado: sem conexão, ele aparece vazio."
+        : `Sem conexão: ${missing.length} dia(s) deste período ainda não foram baixados e aparecem vazios.`;
       drawBody();
     } catch (error) {
-      if (current === request) render(body, h("p", { className: "notice" }, error.message));
+      if (current === request) { offlineNote.hidden = true; render(body, h("p", { className: "notice" }, error.message)); }
     } finally {
       if (current === request) body.classList.remove("loading");
     }
   }
 
   function book(date, time = null, professionalId = view.professionalId) {
-    openBookingDialog({ date: date < today() ? today() : date, time, professionalId,
+    openBookingDialog({ date, time, professionalId,                // only the manager books, also in the past
       services, professionals, onBooked: load });
   }
 
-  const openAppointment = (a) => openAppointmentDialog(a, { professionals, away: isAway(a), onChanged: load });
-  const openAbsence = (t) => openTimeOffDetails(t, nameOf(t.professional_id), load);
+  // Offline: the agenda shows what was downloaded and blocks every change (back online, app.js opens
+  // the page again, with fresh data).
+  const stopListening = onConnectionChange((online) => {
+    if (!container.isConnected) return stopListening();
+    if (!online) { drawToolbar(); drawBody(); }
+  });
+
+  const openAppointment = (a) => openAppointmentDialog(a, { professionals, away: isAway(a), onChanged: load,
+    manager: isManager() });
+  // The manager handles anyone's absences; an employee, only her own (the API checks the same).
+  const mayHandleAbsence = (professionalId) => isManager() || (professionalId && professionalId === myProfessionalId());
+  const openAbsence = (t) => openTimeOffDetails(t, nameOf(t.professional_id), load, mayHandleAbsence(t.professional_id));
+  const absenceButton = () => {
+    const mine = professionals.filter((p) => mayHandleAbsence(p.id));      // all of them, or just her
+    return mine.length > 0 && h("button", { className: "secondary", disabled: !isOnline(), onclick: () => openTimeOffDialog({
+      date: view.date < today() ? today() : view.date, professionals: mine, onSaved: load,
+      professionalId: isManager() ? view.professionalId : mine[0].id }) }, "Ausência");
+  };
 
   function drawToolbar() {
     const [previous, next] = NAV_LABELS[view.mode];
@@ -104,10 +133,9 @@ export async function mount(container) {
         h("div", { className: "segmented", role: "group", "aria-label": "Visualização" },
           VIEWS.map((mode) => h("button", { "aria-pressed": String(mode === view.mode),
             onclick: () => { view.mode = mode; load(); } }, VIEW_LABELS[mode]))),
-        professionals.length > 0 && h("button", { className: "secondary", onclick: () => openTimeOffDialog({
-          date: view.date < today() ? today() : view.date, professionalId: view.professionalId, professionals, onSaved: load }) },
-        "Ausência"),
-        h("button", { className: "primary", onclick: () => book(view.date) }, "Novo agendamento")));
+        absenceButton(),
+        isManager() && h("button", { className: "primary", disabled: !isOnline(), onclick: () => book(view.date) },
+          "Novo agendamento")));
   }
 
   /** "Todas" + one button per professional, in her color: the filter and the color legend at once. */
@@ -124,10 +152,12 @@ export async function mount(container) {
     placeNow = () => {};                       // set again by the time grid when today is on screen
     if (view.mode === "month") return render(body, monthGrid(days));
     const columns = columnsFor(days);
-    if (columns.length === 0) {                // day view: nobody works that day
+    if (columns.length === 0) {                // day view: nobody works that day (closed, or nobody to attend)
       const absences = timeOffs.filter((t) => t.first_day <= days[0] && days[0] <= t.last_day);
-      return render(body, h("div", { className: "card empty-day" },
-        h("p", {}, "Nenhuma profissional atende neste dia."),
+      const salonOpens = workingInterval(settings, null, days[0]) !== null;
+      return render(body, h("div", { className: "card empty-day" + (salonOpens ? " gap-day" : "") },
+        h("p", {}, salonOpens ? "O salão abre neste dia, mas nenhuma profissional atende: não dá para agendar."
+          : "O salão não abre neste dia."),
         absences.map((t) => absenceChip(t, `${nameOf(t.professional_id)} ausente`))));
     }
     // Day view: who is away all day (and has nothing booked) has no column; say so above the grid.
@@ -180,8 +210,8 @@ export async function mount(container) {
   }
 
   function absenceChip(t, label) {
-    return h("button", { className: "away-chip", title: t.reason || "Ausente", onclick: () => openAbsence(t) },
-      label, t.reason && ` · ${t.reason}`);
+    return h("button", { className: "away-chip", title: absenceLabel(t) || "Ausente", onclick: () => openAbsence(t) },
+      label, absenceLabel(t) && ` · ${absenceLabel(t)}`);
   }
 
   function timeGrid(columns) {
@@ -201,20 +231,41 @@ export async function mount(container) {
     }
 
     const nowLines = [];                       // one per column of today (the day view has one per professional)
+    const pastBlocks = [];                     // today's "already passed" shade, one per column of today
     const column = ({ date, professionalId, appts, absences, open }) => {
       const col = h("div", { className: "tg-col", "data-date": date, "data-professional": professionalId || "" });
       col.style.height = height;
-      for (const [from, to] of closedIntervals(open, gridStart, gridEnd)) {   // nobody can be booked: hatched
-        const block = h("div", { className: "tg-off" });
+      // Hatched: yellow where the salon is open but nobody at all can be booked (with a note, when there
+      // is room for it); gray for the rest of what this column cannot book (salon closed, her day off).
+      const uncovered = uncoveredIntervals(settings, professionals, date, timeOffs)
+        .map(([from, to]) => [Math.max(from, gridStart), Math.min(to, gridEnd)]).filter(([from, to]) => to > from);
+      const hatch = (className, from, to, title, note) => {
+        const block = h("div", { className, title }, note && to - from >= 30 && h("span", { className: "tg-gap-note" }, note));
         block.style.top = y(from);
         block.style.height = px(to - from);
         col.append(block);
+      };
+      for (const [from, to] of subtractIntervals(closedIntervals(open, gridStart, gridEnd), uncovered)) {
+        hatch("tg-off", from, to, "Fora do horário de atendimento");
+      }
+      for (const [from, to] of uncovered) hatch("tg-off tg-gap", from, to, "Sem profissional atendendo", "Sem profissional atendendo");
+      // What already passed is dimmed and cannot be clicked: whole days before today, and today up to now
+      // (its height follows the clock, in placeNow).
+      if (date <= drawnOn) {
+        const past = h("div", { className: "tg-past" + (isManager() ? " manager" : ""), title: "Horário que já passou" });
+        past.style.height = date < drawnOn ? height : "0px";
+        if (date === drawnOn) pastBlocks.push(past);
+        col.append(past);
       }
       // Click on an empty spot: book at that time (rounded down to 15 minutes), with her if it is her column.
-      col.addEventListener("click", (e) => {
-        if (e.target !== col) return;
-        const minutes = gridStart + Math.floor(((e.clientY - col.getBoundingClientRect().top) * 60) / HOUR_PX / 15) * 15;
-        book(date, toTime(Math.min(minutes, gridEnd - 15)), professionalId);
+      // Only where someone can be booked and the time has not passed; hatched and past areas take the
+      // click themselves, so they never get here, and this check covers their edges.
+      col.addEventListener("click", (event) => {
+        if (event.target !== col) return;
+        const clicked = gridStart + Math.floor(((event.clientY - col.getBoundingClientRect().top) * 60) / HOUR_PX / 15) * 15;
+        const start = Math.min(clicked, gridEnd - 15);
+        const bookable = open.some(([from, to]) => from <= start && start < to);
+        if (bookable && isOnline() && isManager()) book(date, toTime(start), professionalId);
       });
       // Appointments and partial absences share the width when they overlap.
       const items = [
@@ -244,10 +295,10 @@ export async function mount(container) {
         onclick: () => openAppointment(a) },
       h("strong", {}, `${away ? "⚠ " : ""}${a.start} ${a.client_name}`), h("span", {}, `${a.service_name} · ${a.professional_name}`));
     };
-    const absenceBlock = (t, inHerColumn) => h("button", { className: "tg-away", title: t.reason || "Ausente",
+    const absenceBlock = (t, inHerColumn) => h("button", { className: "tg-away", title: absenceLabel(t) || "Ausente",
       onclick: () => openAbsence(t) },
     h("strong", {}, inHerColumn ? "Ausente" : `${nameOf(t.professional_id)} ausente`),
-    h("span", {}, `${t.start}–${t.end}${t.reason ? ` · ${t.reason}` : ""}`));
+    h("span", {}, `${t.start}–${t.end}${absenceLabel(t) ? ` · ${absenceLabel(t)}` : ""}`));
 
     // Whole-day absences go in a strip under the headers (like Google's all-day events).
     const wholeDay = columns.map((c) => c.absences.filter((t) => !t.start));
@@ -272,6 +323,7 @@ export async function mount(container) {
           node.style.top = y(minutes);
         }
         label.textContent = toTime(minutes);
+        for (const past of pastBlocks) past.style.height = px(Math.min(Math.max(minutes, gridStart), gridEnd) - gridStart);
       };
       placeNow();
     }
@@ -285,21 +337,31 @@ export async function mount(container) {
       const absences = timeOffs.filter((t) => t.first_day <= date && date <= t.last_day && mine(t));
       const appts = appointments.filter((a) => a.date === date && mine(a));
       const chips = [
-        ...absences.map((t) => h("button", { className: "mv-chip mv-away", title: t.reason || "Ausente", onclick: () => openAbsence(t) },
+        ...absences.map((t) => h("button", { className: "mv-chip mv-away", title: absenceLabel(t) || "Ausente", onclick: () => openAbsence(t) },
           h("span", { className: "wide-only" }, `${nameOf(t.professional_id)} `), "ausente")),
         ...appts.map((a) => h("button", { className: `mv-chip ${color(a.professional_id)}${isAway(a) ? " conflict" : ""}`,
           title: `${a.start} ${a.client_name} · ${a.service_name} · ${a.professional_name}`,
           onclick: () => openAppointment(a) }, isAway(a) && "⚠ ", a.start, h("span", { className: "wide-only" }, ` ${a.client_name}`))),
       ];
+      // a whole day the salon opens with nobody to attend is yellow, not gray like a closed day
+      const salonOpens = workingInterval(settings, null, date) !== null;
+      const nobody = salonOpens && openIntervals(settings, professionals, date, timeOffs).length === 0
+        && professionals.length > 0;
+      const closed = !nobody && openIntervals(settings, team(), date, timeOffs).length === 0;
       const classes = ["mv-cell", date.slice(0, 7) !== month && "other", date === today() && "today",
-        openIntervals(settings, team(), date, timeOffs).length === 0 && "closed"].filter(Boolean).join(" ");
+        nobody && "uncovered", closed && "closed"].filter(Boolean).join(" ");
       const node = h("div", { className: classes, "data-date": date },
         h("button", { className: "mv-date", onclick: () => showDay(date), "aria-label": prettyDate(date) },
           String(parseIso(date).getDate())),
+        nobody && h("span", { className: "mv-gap-note", title: "O salão abre, mas nenhuma profissional atende neste dia" },
+          "Sem profissional"),
         chips.slice(0, MONTH_CHIPS),
         chips.length > MONTH_CHIPS && h("button", { className: "mv-more", onclick: () => showDay(date) },
           `+${chips.length - MONTH_CHIPS}`, h("span", { className: "wide-only" }, " mais")));
-      node.addEventListener("click", (e) => { if (e.target === node) book(date); });
+      // A click on the day books on it, unless it is over, closed, or has nobody to attend.
+      const bookable = isManager() && !nobody && !closed;
+      if (!bookable) node.classList.add("not-bookable");
+      node.addEventListener("click", (e) => { if (e.target === node && bookable && isOnline()) book(date); });
       return node;
     };
     return h("div", { className: "mv" },
