@@ -596,6 +596,20 @@ def run_long_lists():
         page.fill(".list-search", "ra")                                 # Carla, Márcia, Rafael, Sabrina, Tânia Araújo...
         expect(page.locator(".pager")).to_be_hidden()
         assert page.locator(".list-item").count() > 3
+
+        # the agenda's filter, with 22 professionals: folded, only "Todas" and the chosen ones stay
+        page.click("nav >> text=Agenda")
+        pills = page.locator(".cal-filter .pill")
+        expect(pills).to_have_count(23)                                  # "Todas" + 22
+        page.click(".cal-filter >> text=Júlia Martins")
+        page.click(".cal-filter .fold")                                  # "Recolher"
+        expect(pills).to_have_text(["Todas", "Júlia Martins"])
+        expect(page.locator(".cal-filter .fold")).to_have_text("Mostrar profissionais (22) ▾")
+        page.reload()                                                     # remembered on this device
+        expect(page.locator(".cal-filter .fold")).to_have_attribute("aria-expanded", "false")
+        expect(pills).to_have_count(1)                                   # a reload forgets the choice: "Todas"
+        page.click(".cal-filter .fold")
+        expect(pills).to_have_count(23)
         browser.close()
     server.shutdown()
     assert not errors, errors

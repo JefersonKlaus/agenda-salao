@@ -26,12 +26,22 @@ const NAV_LABELS = {
 };
 const WEEKDAY_NAMES = ["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"];
 const NOW_TICK_MS = 30_000;                    // the "now" marker moves every 30 s: never more than a minute behind
+const FOLD_AFTER = 6;                          // more professionals than this: the filter can be folded
+const FOLDED_KEY = "agenda.filterFolded";      // remembered on this device (a convenience: may be missing)
+
+function rememberedFolded() {
+  try { return localStorage.getItem(FOLDED_KEY) === "1"; } catch { return false; }
+}
+function rememberFolded(folded) {
+  try { localStorage.setItem(FOLDED_KEY, folded ? "1" : "0"); } catch { /* no storage: just not remembered */ }
+}
 
 // Kept while the app is open, so coming back to the agenda shows the same view and period.
 const view = {
   mode: window.matchMedia("(max-width: 640px)").matches ? "day" : "week",
   date: today(),
   chosen: [],                                  // the professionals shown; [] = all of them
+  folded: rememberedFolded(),                  // the filter shows only "Todas" and the chosen ones
 };
 
 export async function mount(container) {
@@ -162,7 +172,8 @@ export async function mount(container) {
   };
 
   /** "Todas" + one button per professional, in her color: the filter and the color legend at once.
-   *  Each name turns on and off, so the agenda shows one, some or all of them. */
+   *  Each name turns on and off, so the agenda shows one, some or all of them. With more than
+   *  FOLD_AFTER professionals the names can be folded away: then only the chosen ones stay. */
   function drawFilter() {
     const all = h("button", { className: "pill", "aria-pressed": String(!filtered()), onclick: () => filterBy([]),
       title: "Ver a agenda de todas" }, "Todas");
@@ -172,9 +183,15 @@ export async function mount(container) {
         title: on ? `Tirar ${p.name} da agenda` : `Mostrar ${p.name}` },
       h("span", { className: `dot ${color(p.id)}`, "aria-hidden": "true" }), p.name);
     };
-    render(filterBar, professionals.length > 0 && [all, professionals.map(pill),
+    const many = professionals.length > FOLD_AFTER;
+    const folded = many && view.folded;
+    const pills = folded ? professionals.filter((p) => view.chosen.includes(p.id)) : professionals;
+    const fold = many && h("button", { className: "link fold", "aria-expanded": String(!folded),
+      onclick: () => { view.folded = !folded; rememberFolded(view.folded); drawFilter(); } },
+    folded ? `Mostrar profissionais (${professionals.length}) ▾` : "Recolher ▴");
+    render(filterBar, professionals.length > 0 && [all, pills.map(pill),
       filtered() && h("span", { className: "muted filter-count" },
-        `${view.chosen.length} de ${professionals.length}`)]);
+        `${view.chosen.length} de ${professionals.length}`), fold]);
   }
 
   function drawBody() {

@@ -108,6 +108,7 @@ button.icon:hover, .tg-day-head:hover .tg-date, .mv-date:hover { background: var
 .pill .dot { margin-right: 6px; }
 .pill[aria-pressed="true"] { border-color: var(--brand); background: var(--brand-light); color: var(--brand); font-weight: 600; }
 .cal-filter .filter-count { align-self: center; font-size: .85rem; margin-left: 4px; }
+.cal-filter .fold { align-self: center; padding: 6px 8px; font-size: .9rem; }
 
 .tg { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow-x: auto; }
 .tg-head, .tg-grid { display: grid; }          /* columns set by agenda.js: days, or one per professional */
