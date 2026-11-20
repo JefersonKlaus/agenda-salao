@@ -1,5 +1,5 @@
 // Cognito login straight through its public API (no library). Tokens live only in the tab's session.
-// CONFIG.skipLogin is only ever set by e2e/local_server.py: there is no login and the local server
+// CONFIG.skipLogin is only ever set by local/server.py: there is no login and the local server
 // answers every request as the same salon. The deployed API still requires a valid token for everything.
 import { CONFIG } from "./config.js";
 
@@ -57,6 +57,20 @@ export async function setNewPassword({ session, email }, password) {
 }
 
 export const isSignedIn = () => Boolean(CONFIG.skipLogin || load()?.idToken);
+
+/** "manager" or "employee", from the ID token's Cognito groups (the local server says it in CONFIG.role).
+ *  Only hides what the user cannot do: the API checks the token's groups again on every request. */
+export function role() {
+  if (CONFIG.skipLogin) return CONFIG.role || "manager";
+  let groups = [];
+  try {
+    const payload = load().idToken.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    groups = JSON.parse(atob(payload))["cognito:groups"] || [];
+  } catch { /* not a JWT (the browser test's fake token): no groups */ }
+  return groups.includes("employee") && !groups.includes("manager") ? "employee" : "manager";
+}
+
+export const isManager = () => role() === "manager";
 
 export function signOut() {
   cached = null;

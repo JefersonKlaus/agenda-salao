@@ -1,0 +1,4 @@
+{
+  "route": "POST /services",
+  "database": "write"
+}

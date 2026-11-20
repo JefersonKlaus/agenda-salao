@@ -17,7 +17,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -r requirements-dev.txt          # the same pinned versions as `python dev.py setup`
-      - run: python -m pytest -q backend/tests
+      - run: python -m pytest -q local/tests
 
   frontend:
     name: Frontend (syntax, unit tests and browser)
@@ -43,7 +43,7 @@ jobs:
         run: |
           pip install -r requirements-dev.txt
           playwright install --with-deps chromium
-          python e2e/run_e2e.py
+          python local/e2e.py
 
   infra:
     name: Terraform (format and validation)

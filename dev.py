@@ -3,7 +3,7 @@
 frontend checks). Everything is installed inside .venv/, nothing globally.
 
     python dev.py setup     create .venv with the test tools and download Chromium for the browser test
-    python dev.py serve     the site + in-memory API at http://127.0.0.1:8765, no login (--port to change)
+    python dev.py serve     the site + in-memory API at http://127.0.0.1:8765, no login (manager|employee, --port)
     python dev.py test      backend tests, calendar unit tests and the JS syntax check (quick)
     python dev.py e2e       the browser test (a real Chromium)
     python dev.py all       test + e2e: what CI runs, except Terraform
@@ -55,13 +55,13 @@ def setup(args: argparse.Namespace) -> int:
 
 def serve(args: argparse.Namespace) -> int:
     try:
-        return run(python(), "e2e/local_server.py", "--port", str(args.port))
+        return run(python(), "local/server.py", args.role, "--port", str(args.port))
     except KeyboardInterrupt:
         return 0
 
 
 def test(_: argparse.Namespace) -> int:
-    results = {"backend tests": run(python(), "-m", "pytest", "-q", "backend/tests")}
+    results = {"backend tests": run(python(), "-m", "pytest", "-q", "local/tests")}
     node = shutil.which("node")
     if node:
         results["calendar unit tests"] = run(node, "--test", *sorted((ROOT / "frontend/tests").glob("*.test.mjs")))
@@ -90,7 +90,7 @@ def _check_js_syntax(node: str) -> int:
 
 
 def e2e(_: argparse.Namespace) -> int:
-    return run(python(), "e2e/run_e2e.py")
+    return run(python(), "local/e2e.py")
 
 
 def all_checks(args: argparse.Namespace) -> int:
@@ -104,6 +104,8 @@ def main() -> int:
     setup_parser.add_argument("--with-deps", action="store_true",
                               help="also install Chromium's system libraries (Linux; uses sudo/apt)")
     serve_parser = commands.add_parser("serve", help="the site + in-memory API, no login")
+    serve_parser.add_argument("role", nargs="?", choices=("manager", "employee"), default="manager",
+                              help="the Cognito group to simulate (default: manager)")
     serve_parser.add_argument("--port", type=int, default=8765)
     commands.add_parser("test", help="backend tests, calendar unit tests and JS syntax")
     commands.add_parser("e2e", help="the browser test")

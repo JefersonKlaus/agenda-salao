@@ -37,7 +37,7 @@ export function toCents(text) {
 }
 
 // The salon's clock: Brasília, UTC-3 all year (no daylight saving time since 2019), exactly like the
-// backend's (backend/src/agenda/clock.py). The device's own time zone does not matter.
+// backend's (backend/core/agenda_core/adapters/clock.py). The device's own time zone does not matter.
 const SALON_UTC_OFFSET_MIN = -3 * 60;
 
 /** The salon's current date ("YYYY-MM-DD") and time in minutes since midnight. */

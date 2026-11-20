@@ -1,0 +1,4 @@
+{
+  "route": "GET /availability",
+  "database": "read"
+}

@@ -1,5 +1,6 @@
 // Services and professionals: the same list-with-form screen, only the fields change.
 import { api } from "../api.js";
+import { isManager } from "../auth.js";
 import { colorClass, hoursOutsideSalon, workHoursSummary } from "../calendar.js";
 import { durationText, formatMoney, h, notify, render, toCents, whileDisabled } from "../util.js";
 
@@ -74,7 +75,7 @@ function emptyState({ image, heading, text, button, hint }, onAdd) {
     h("h2", {}, heading),
     h("p", { className: "muted" }, text),
     hint && h("p", { className: "muted" }, hint),
-    h("button", { className: "primary", onclick: onAdd }, button));
+    onAdd && h("button", { className: "primary", onclick: onAdd }, button));
 }
 
 export function createScreen({ route, title, empty, summary, details = null, marker = null, extraActions = null }) {
@@ -93,17 +94,18 @@ export function createScreen({ route, title, empty, summary, details = null, mar
 
     function listView(items, services, settings) {
       const serviceNames = Object.fromEntries(services.map((s) => [s.id, s.name]));
-      const add = () => { editing = {}; draw(); };
+      const manager = isManager();                // employees only see the list
+      const add = manager ? () => { editing = {}; draw(); } : null;
       return [
         h("div", { className: "row" }, h("h1", {}, title),
-          items.length > 0 && h("button", { className: "primary", onclick: add }, "Adicionar")),
+          add && items.length > 0 && h("button", { className: "primary", onclick: add }, "Adicionar")),
         items.length === 0 && emptyState(empty(services), add),
         items.map((item) => h("div", { className: "card" + (item.active === false ? " inactive" : "") },
           h("div", { className: "row" }, h("strong", {}, marker && marker(item, items), item.name,
             item.active === false && h("span", { className: "badge" }, "Desativado")),
           h("span", { className: "muted" }, summary(item, serviceNames))),
           details && details(item, settings),
-          h("div", { className: "actions" },
+          manager && h("div", { className: "actions" },
             h("button", { className: "secondary", onclick: () => { editing = item; draw(); } }, "Editar"),
             extraActions && extraActions(item, draw),
             h("button", { className: "danger", onclick: (e) => remove(e.target, item) }, "Excluir")))),

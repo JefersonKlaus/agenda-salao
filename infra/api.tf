@@ -10,7 +10,7 @@ resource "aws_apigatewayv2_api" "api" {
   }
 }
 
-# API Gateway checks the token's signature, expiry and audience BEFORE calling the Lambda.
+# API Gateway checks the token's signature, expiry and audience BEFORE calling any Lambda.
 resource "aws_apigatewayv2_authorizer" "jwt" {
   api_id           = aws_apigatewayv2_api.api.id
   name             = "cognito"
@@ -23,17 +23,21 @@ resource "aws_apigatewayv2_authorizer" "jwt" {
   }
 }
 
-resource "aws_apigatewayv2_integration" "lambda" {
+# One route per Lambda, taken from its lambda.json (infra/lambda.tf). A path or method with no route
+# is answered 404 by API Gateway itself, without calling any Lambda.
+resource "aws_apigatewayv2_integration" "action" {
+  for_each               = local.lambdas
   api_id                 = aws_apigatewayv2_api.api.id
   integration_type       = "AWS_PROXY"
-  integration_uri        = aws_lambda_function.api.invoke_arn
+  integration_uri        = aws_lambda_function.action[each.key].invoke_arn
   payload_format_version = "2.0"
 }
 
-resource "aws_apigatewayv2_route" "catch_all" {
+resource "aws_apigatewayv2_route" "action" {
+  for_each           = local.lambdas
   api_id             = aws_apigatewayv2_api.api.id
-  route_key          = "ANY /{proxy+}"
-  target             = "integrations/${aws_apigatewayv2_integration.lambda.id}"
+  route_key          = each.value.route
+  target             = "integrations/${aws_apigatewayv2_integration.action[each.key].id}"
   authorization_type = "JWT"
   authorizer_id      = aws_apigatewayv2_authorizer.jwt.id
 }
@@ -67,9 +71,10 @@ resource "aws_apigatewayv2_stage" "default_stage" {
 }
 
 resource "aws_lambda_permission" "api_invokes_lambda" {
+  for_each      = local.lambdas
   statement_id  = "AllowAPIGateway"
   action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.api.function_name
+  function_name = aws_lambda_function.action[each.key].function_name
   principal     = "apigateway.amazonaws.com"
   source_arn    = "${aws_apigatewayv2_api.api.execution_arn}/*/*"
 }

@@ -1,0 +1,4 @@
+{
+  "route": "DELETE /appointments/{id}",
+  "database": "write"
+}

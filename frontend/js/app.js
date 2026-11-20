@@ -1,5 +1,5 @@
 import { CONFIG } from "./config.js";
-import { isSignedIn, setNewPassword, signIn, signOut } from "./auth.js";
+import { isManager, isSignedIn, setNewPassword, signIn, signOut } from "./auth.js";
 import { h, notify, render, whileDisabled } from "./util.js";
 import { mount as agenda } from "./screens/agenda.js";
 import { mount as settings } from "./screens/settings.js";
@@ -57,17 +57,20 @@ function start() {
     if (e.key === "Escape" && sidebar.classList.contains("open")) { setDrawer(false); toggle.focus(); }
   });
 
+  // Configurações is the manager's: an employee sees the catalog but cannot change the salon.
+  const screens = SCREENS.filter(([name]) => isManager() || name !== "Configurações");
   const open = (index) => {
     [...menu.children].forEach((b, i) => (i === index ? b.setAttribute("aria-current", "page") : b.removeAttribute("aria-current")));
     setDrawer(false);
     const area = h("div");
     render(content, area);
-    SCREENS[index][1](area);
+    screens[index][1](area);
   };
-  render(menu, SCREENS.map(([name], i) => h("button", { onclick: () => open(i) }, name)));
+  render(menu, screens.map(([name], i) => h("button", { onclick: () => open(i) }, name)));
   const logout = document.getElementById("logout");
   if (CONFIG.skipLogin) {                        // local server: there is nobody to log out
-    logout.replaceWith(h("span", { id: "local-mode", className: "muted" }, "Modo local, sem login"));
+    logout.replaceWith(h("span", { id: "local-mode", className: "muted" },
+      `Modo local, sem login (${isManager() ? "gerente" : "funcionária"})`));
   } else logout.onclick = () => { signOut(); location.reload(); };
   open(0);
 }

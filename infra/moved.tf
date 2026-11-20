@@ -9,18 +9,8 @@ moved {
 }
 
 moved {
-  from = aws_apigatewayv2_route.todas
-  to   = aws_apigatewayv2_route.catch_all
-}
-
-moved {
   from = aws_apigatewayv2_stage.padrao
   to   = aws_apigatewayv2_stage.default_stage
-}
-
-moved {
-  from = aws_lambda_permission.api_chama_lambda
-  to   = aws_lambda_permission.api_invokes_lambda
 }
 
 moved {
@@ -31,4 +21,11 @@ moved {
 moved {
   from = aws_iam_role_policy.lambda_dados
   to   = aws_iam_role_policy.lambda_data
+}
+
+# The single API Lambda was split into one Lambda per action (backend/lambdas/). Its logging
+# attachment is kept as the write role's one, instead of being detached and attached again.
+moved {
+  from = aws_iam_role_policy_attachment.lambda_logs
+  to   = aws_iam_role_policy_attachment.lambda_logs["write"]
 }

@@ -1,0 +1,4 @@
+{
+  "route": "GET /time-off",
+  "database": "read"
+}
